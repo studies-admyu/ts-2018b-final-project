@@ -6,6 +6,7 @@ class FrontQtInferenceThread(QThread):
     def __init__(self):
         QThread.__init__(self)
         self.setModel(None)
+        self.setForwardArgsList(None)
     
     def __del__(self):
         self.wait()

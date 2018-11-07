@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from PyQt5.QtCore import Qt, QSignalMapper
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QIcon
 from PyQt5.QtWidgets import QMainWindow, QAction, QMenu, QMessageBox, qApp, \
     QLabel, QDockWidget, QToolButton, QPushButton, QGridLayout, QFrame, \
-    QColorDialog, QStackedWidget
+    QColorDialog
 
 from .ui_dialog_new_project import FrontQtDialogNewProject
 from .ui_widget_video_frame_editor import FrontQtVideoFrameEditor
@@ -83,7 +83,7 @@ class FrontQtWindowMain(QMainWindow):
         dockLayout = QGridLayout()
         
         self._btnCurrentColor = QPushButton()
-        self._btnCurrentColor.setToolTip('Pick point color')
+        self._btnCurrentColor.setToolTip('Select current color')
         self._btnCurrentColor.setAutoFillBackground(True)
         self._btnCurrentColor.clicked.connect(self._pickPointColor)
         dockLayout.addWidget(self._btnCurrentColor, 0, 0, 1, 3)
@@ -94,18 +94,33 @@ class FrontQtWindowMain(QMainWindow):
         for i, key in enumerate(self._toolKeyList):
             if key ==  self._wgtFrameEditor.EDIT_MODE_HAND:
                 self._toolButtons[key].setToolTip('Hand')
+                self._toolButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/hand.png')
+                )
                 row, col = 1, 0
             elif key == self._wgtFrameEditor.EDIT_MODE_EYEDROPPER:
-                self._toolButtons[key].setToolTip('Eyedropper')
+                self._toolButtons[key].setToolTip('Color picker')
+                self._toolButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/color_picker.png')
+                )
                 row, col = 1, 2
             elif key == self._wgtFrameEditor.EDIT_MODE_ADD_POINT:
                 self._toolButtons[key].setToolTip('Add color point')
+                self._toolButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/pencil_add.png')
+                )
                 row, col = 2, 0
             elif key == self._wgtFrameEditor.EDIT_MODE_EDIT_POINT:
                 self._toolButtons[key].setToolTip('Edit color point')
+                self._toolButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/pencil_go.png')
+                )
                 row, col = 2, 1
             elif key == self._wgtFrameEditor.EDIT_MODE_REMOVE_POINT:
-                self._toolButtons[key].setToolTip('Remove color point')
+                self._toolButtons[key].setToolTip('Delete color point')
+                self._toolButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/pencil_delete.png')
+                )
                 row, col = 2, 2
             self._toolButtons[key].setCheckable(True)
             self._sgmToolSignalMapper.setMapping(self._toolButtons[key], key)
@@ -135,12 +150,21 @@ class FrontQtWindowMain(QMainWindow):
         for i, key in enumerate(self._sceneModesList):
             if key ==  self._wgtFrameEditor.SCENE_MODE_ORIGINAL:
                 self._sceneModeButtons[key].setToolTip('Original')
+                self._sceneModeButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/color_wheel.png')
+                )
                 row, col = 0, 0
             elif key == self._wgtFrameEditor.SCENE_MODE_GRAYSCALE:
                 self._sceneModeButtons[key].setToolTip('Grayscale')
+                self._sceneModeButtons[key].setIcon(
+                    QIcon('images/icons/16x16_gray/color_wheel.png')
+                )
                 row, col = 0, 1
             elif key == self._wgtFrameEditor.SCENE_MODE_COLORIZED:
                 self._sceneModeButtons[key].setToolTip('Colorized')
+                self._sceneModeButtons[key].setIcon(
+                    QIcon('images/icons/16x16_color/two_pictures.png')
+                )
                 row, col = 0, 2
             self._sceneModeButtons[key].setCheckable(True)
             self._sgmSceneModeSignalMapper.setMapping(
@@ -150,6 +174,16 @@ class FrontQtWindowMain(QMainWindow):
                 self._sgmSceneModeSignalMapper.map
             )
             dockLayout.addWidget(self._sceneModeButtons[key], row, col)
+        
+        self._tbtnInferenceModel = QToolButton()
+        self._tbtnInferenceModel.setToolTip('Calculate colorization')
+        self._tbtnInferenceModel.setIcon(
+            QIcon('images/icons/16x16_color/magic_wand_2.png')
+        )
+        self._tbtnInferenceModel.clicked.connect(
+            self._wgtFrameEditor.modelInference
+        )
+        dockLayout.addWidget(self._tbtnInferenceModel, 1, 1)
         
         dockFrame = QFrame()
         dockFrame.setLayout(dockLayout)
@@ -170,6 +204,9 @@ class FrontQtWindowMain(QMainWindow):
         self._dwgPlayback.setWidget(dockFrame)
         self.addDockWidget(Qt.BottomDockWidgetArea, self._dwgPlayback)
         self._mnuView.addAction(self._dwgPlayback.toggleViewAction())
+    
+    def _initModel(self, model, model_context):        
+        self._wgtFrameEditor.setModel(model, model_context)
     
     def reset(self):
         self._pickedColor = QColor.fromRgb(128, 128, 128)
@@ -221,7 +258,7 @@ class FrontQtWindowMain(QMainWindow):
         for key in self._sceneModesList:
             self._sceneModeButtons[key].setChecked(key == scene_mode)
     
-    def __init__(self):
+    def __init__(self, model = None, model_context = None):
         QMainWindow.__init__(self)
         
         self._toolKeyList = (
@@ -246,7 +283,11 @@ class FrontQtWindowMain(QMainWindow):
         self._createPaintDock()
         self._createViewDock()
         self._createPlaybackDock()
+        self._initModel(model, model_context)
         
         self.setWindowTitle('Qt Frontend')
         self.setWindowState(Qt.WindowMaximized)
+        self.setWindowIcon(
+            QIcon('images/icons/32x32_color/convert_gray_to_color.png')
+        )
         self.reset()

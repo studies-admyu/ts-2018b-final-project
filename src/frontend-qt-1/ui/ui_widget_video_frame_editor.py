@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import cv2
+import numpy as np
+
+from skimage import color as skcl
 
 from PyQt5.QtCore import pyqtSignal, Qt, QRectF, QPoint
 from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
@@ -165,8 +168,10 @@ class FrontQtVideoFrameEditor(QFrame):
         top_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(top_layout)
         
-        self.colorization_thread = FrontQtInferenceThread()
-        # ToDo assign model and connect finish to slot
+        self._model_thread = FrontQtInferenceThread()
+        self._model_thread.finished.connect(self._modelInferenceCompleted)
+        
+        self.setModel(None, None)
         
         self.reset()
     
@@ -189,15 +194,14 @@ class FrontQtVideoFrameEditor(QFrame):
             first_frame_gray3.shape[1], first_frame_gray3.shape[0],
             QImage.Format_RGB888
         )
+        self._frame_image_model_output = QImage(
+            first_frame_gray3.copy().data,
+            first_frame_gray3.shape[1], first_frame_gray3.shape[0],
+            QImage.Format_RGB888
+        )
 
         self.setSceneMode(self.sceneMode())
         self._main_widget_stack.setVisible(True)
-    
-    def _colorization_inference_start(self):
-        pass
-    
-    def _colorization_inference_end(self):
-        pass
         
     def _frameViewMouseMoveEvent(self, event):
         scene_point = self._scene_widget.mapToScene(
@@ -298,8 +302,12 @@ class FrontQtVideoFrameEditor(QFrame):
         
         if self._sceneMode == self.SCENE_MODE_ORIGINAL:
             self._bg_item.setPixmap(QPixmap.fromImage(self._frame_image_orig))
-        else:
+        elif self._sceneMode == self.SCENE_MODE_GRAYSCALE:
             self._bg_item.setPixmap(QPixmap.fromImage(self._frame_image_gray3))
+        elif self._sceneMode == self.SCENE_MODE_COLORIZED:
+            self._bg_item.setPixmap(
+                QPixmap.fromImage(self._frame_image_model_output)
+            )
         self._scene.update()
     
     def sceneMode(self):
@@ -314,14 +322,118 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._scene.update()
     
-    def initColorizationModel(self, model_constructor, args):
-        self._colorization_model = model_constructor(*args)
-    
     def currentColor(self):
         return self._current_color
     
-    def updateColorization(self):
-        pass
+    def setModel(self, model, context):
+        self._model = model
+        self._model_context = context
+        self._model_thread.setModel(self._model)
     
-    def _updateColorizationFinished(self):
-        pass
+    def model(self):
+        return self._model
+    
+    def modelContext(self):
+        return self._model_context
+    
+    def _preprocess_model_input(self):
+        w = int(max((
+            self._frame_image_orig.width(), self._frame_image_orig.height()
+        )) / self._model_context['load_size'])
+        
+        ptr = self._frame_image_gray3.constBits()
+        ptr.setsize(self._frame_image_gray3.byteCount())
+        
+        frame_gray_cv2 = np.array(ptr, dtype = np.uint8).reshape((
+            self._frame_image_gray3.height(), self._frame_image_gray3.width(),
+            3
+        ))
+        
+        incoming_frame_gray_cv2 = cv2.resize(
+            frame_gray_cv2, (
+                self._model_context['load_size'],
+                self._model_context['load_size']
+            ),
+            interpolation = cv2.INTER_CUBIC
+        )
+        
+        im = np.zeros(incoming_frame_gray_cv2.shape, dtype = np.uint8)
+        mask = np.zeros(
+            tuple(list(incoming_frame_gray_cv2.shape[:-1]) + [1]),
+            dtype = np.uint8
+        )
+        
+        for item in self._scene.items():
+            if not isinstance(item, _FrontQtVideoFramePoint):
+                continue
+            if not item.isVisible():
+                continue
+            
+            point = (
+                np.array([item.x(), item.y()]) *
+                self._model_context['load_size'] /
+                np.array(frame_gray_cv2.shape[1::-1])
+            ).astype(np.uint)
+            
+            tl = tuple((point - w).tolist())
+            br = tuple((point + w).tolist())
+            
+            cv2.rectangle(mask, tl, br, 255, -1)
+            cv2.rectangle(
+                im, tl, br,
+                [
+                    item.color().red(), item.color().green(),
+                    item.color().blue()
+                ],
+                -1
+            )
+            
+        im_mask0 = (mask > 0.0).transpose((2, 0, 1))
+        im_ab0 = skcl.rgb2lab(im).transpose((2, 0, 1))[1:3, :, :]
+        
+        self._model.set_image(incoming_frame_gray_cv2)
+        self._model_thread.setForwardArgsList([im_ab0, im_mask0])
+    
+    def _postprocess_model_output(self):
+        incoming_frame = self._frame_image_orig.rgbSwapped()
+        
+        ptr = incoming_frame.constBits()
+        ptr.setsize(incoming_frame.byteCount())
+        
+        incoming_frame_cv2 = np.array(ptr, dtype = np.uint8).reshape(
+            (incoming_frame.height(), incoming_frame.width(), 3)
+        )
+        
+        incoming_frame_l = skcl.rgb2lab(incoming_frame_cv2)[:, :, 0]
+        
+        out_ab = self._model.output_ab.transpose((1, 2, 0))
+        out_ab = cv2.resize(
+            out_ab, incoming_frame_l.shape[::-1],
+            interpolation = cv2.INTER_CUBIC
+        )
+        out_lab = np.concatenate(
+            (incoming_frame_l[..., np.newaxis], out_ab), axis = 2
+        )
+        out_img = (np.clip(skcl.lab2rgb(out_lab), 0, 1) * 255).astype(np.uint8)
+        
+        self._frame_image_model_output = QImage(
+            out_img.data,
+            out_img.shape[1], out_img.shape[0],
+            QImage.Format_RGB888
+        )
+        
+        # Update pixmap
+        self.setSceneMode(self.sceneMode())
+    
+    def modelInference(self):
+        if self._model is None:
+            return
+        self._main_widget_stack.setCurrentIndex(1)
+        self._preprocess_model_input()
+        self._model_thread.start()
+    
+    def _modelInferenceCompleted(self):
+        if self._model is None:
+            return
+        self._postprocess_model_output()
+        self._main_widget_stack.setCurrentIndex(0)
