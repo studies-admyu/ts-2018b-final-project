@@ -198,8 +198,42 @@ class FrontQtWindowMain(QMainWindow):
             Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea
         )
         
+        dockLayout = QGridLayout()
+        
+        self._tbtnPreviousFrame = QToolButton()
+        self._tbtnPreviousFrame.setToolTip('Previous frame')
+        self._tbtnPreviousFrame.setIcon(
+            QIcon('images/icons/16x16_color/control_start_blue.png')
+        )
+        self._tbtnPreviousFrame.clicked.connect(
+            self._wgtFrameEditor.previousFrame
+        )
+        dockLayout.addWidget(self._tbtnPreviousFrame, 0, 0)
+        
+        self._tbtnNextFrame = QToolButton()
+        self._tbtnNextFrame.setToolTip('Next frame')
+        self._tbtnNextFrame.setIcon(
+            QIcon('images/icons/16x16_color/control_end_blue.png')
+        )
+        self._tbtnNextFrame.clicked.connect(
+            self._wgtFrameEditor.nextFrame
+        )
+        dockLayout.addWidget(self._tbtnNextFrame, 0, 1)
+        
+        self._tbtnExtrapolateNext = QToolButton()
+        self._tbtnExtrapolateNext.setToolTip(
+            'Extrapolate points to next frame'
+        )
+        self._tbtnExtrapolateNext.setIcon(
+            QIcon('images/icons/16x16_color/control_cursor_blue.png')
+        )
+        self._tbtnExtrapolateNext.clicked.connect(
+            self._wgtFrameEditor.extrapolateNext
+        )
+        dockLayout.addWidget(self._tbtnExtrapolateNext, 0, 2)
+        
         dockFrame = QFrame()
-        #dockFrame.setLayout(dockLayout)
+        dockFrame.setLayout(dockLayout)
         
         self._dwgPlayback.setWidget(dockFrame)
         self.addDockWidget(Qt.BottomDockWidgetArea, self._dwgPlayback)

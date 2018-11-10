@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import math
+
 import cv2
 import numpy as np
 
 from skimage import color as skcl
 
-from PyQt5.QtCore import pyqtSignal, Qt, QRectF, QPoint
+from PyQt5.QtCore import pyqtSignal, Qt, QRectF, QPoint, QPointF
 from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
     QColor, QPen, QBrush, QMouseEvent
 from PyQt5.QtWidgets import QFrame, QGraphicsView, QGraphicsScene, \
@@ -175,110 +177,225 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self.reset()
     
-    def openVideoFile(self, filename):
-        self.reset()
+    def _updateFrame(self, frame, frame_index):
+        if frame_index not in self._frames_cache:
+            self._frames_cache[frame_index] = None
+        # Cache frame
+        self._frames_cache[frame_index] = frame
+        self._updateCachedFrame(frame_index)
+    
+    def _updateCachedFrame(self, frame_index):
+        frame = self._frames_cache[frame_index]
+        # Set current frame
+        self._current_frame = frame_index
         
-        self._vcap = cv2.VideoCapture(filename)
-        _, first_frame = self._vcap.read()
-        first_frame_gray3 = cv2.cvtColor(
-            cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2RGB
+        frame_gray3 = cv2.cvtColor(
+            cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2RGB
         )
-        
         self._frame_image_orig = QImage(
-            first_frame.data,
-            first_frame.shape[1], first_frame.shape[0],
+            frame.data,
+            frame.shape[1], frame.shape[0],
             QImage.Format_RGB888
         ).rgbSwapped()
         self._frame_image_gray3 = QImage(
-            first_frame_gray3.data,
-            first_frame_gray3.shape[1], first_frame_gray3.shape[0],
+            frame_gray3.data,
+            frame_gray3.shape[1], frame_gray3.shape[0],
             QImage.Format_RGB888
         )
         self._frame_image_model_output = QImage(
-            first_frame_gray3.copy().data,
-            first_frame_gray3.shape[1], first_frame_gray3.shape[0],
+            frame_gray3.copy().data,
+            frame_gray3.shape[1], frame_gray3.shape[0],
             QImage.Format_RGB888
         )
 
         self.setSceneMode(self.sceneMode())
-        self._main_widget_stack.setVisible(True)
+    
+    def _setCurrentPoints(self, points):
+        items_list = []
+        for item in self._scene.items():
+            if not isinstance(item, _FrontQtVideoFramePoint):
+                continue
+            items_list.append(item)
         
-    def _frameViewMouseMoveEvent(self, event):
-        scene_point = self._scene_widget.mapToScene(
-            QPoint(event.x(), event.y())
-        ).toPoint()
-        if not self._frame_image_orig.rect().contains(scene_point):
-            if self._mouse_in_frame:
-                self.frame_mouse_leave.emit()
-                self._mouse_in_frame = False
-            return
+        max_length = max((len(points), len(items_list)))
+        
+        for i in range(max_length):
+            if i >= len(items_list):
+                new_item = _FrontQtVideoFramePoint()
+                self._scene.addItem(new_item)
+                items_list.append(new_item)
             
-        self._mouse_in_frame = True
-        self.frame_mouse_move.emit(scene_point.x(), scene_point.y())
+            if i < len(points):
+                item_pos = QPointF(
+                    math.floor(points[i]['x']), math.floor(points[i]['y'])
+                ) + QPointF(0.5, 0.5)
+                item_color = QColor.fromRgb(
+                    points[i]['color'][0], points[i]['color'][1],
+                    points[i]['color'][2]
+                )
+                items_list[i].setPos(item_pos)
+                items_list[i].setColor(item_color)
+                items_list[i].setZValue(1.0)
+                items_list[i].setVisible(True)
+            else:
+                items_list[i].setPos(0.0, 0.0)
+                items_list[i].setZValue(-2.0)
+                items_list[i].setVisible(False)
+    
+    def _getCurrentPoints(self):
+        points_list = []
+        for item in self._scene.items():
+            if not isinstance(item, _FrontQtVideoFramePoint):
+                continue
+            if not item.isVisible():
+                continue
+            
+            point = {
+                'x': math.floor(item.x()),
+                'y': math.floor(item.y()),
+                'color': [
+                    item.color().red(),
+                    item.color().green(),
+                    item.color().blue()
+                ]
+            }
+            
+            points_list.append(point)
+        
+        return points_list
+    
+    def _updateCachedPoints(self, frame_index):
+        self._setCurrentPoints(self._points_cache[frame_index])
+    
+    def _updatePoints(self, cached_points, frame_index):
+        self._points_cache[frame_index] = cached_points[:]
+        self._updateCachedPoints(frame_index)
+    
+    def openVideoFile(self, filename):
+        self.reset()
+        
+        self._vcap = cv2.VideoCapture(filename)
+        self._frames_cache = {}
+        self._points_cache = {}
+        _, first_frame = self._vcap.read()
+        
+        self._updateFrame(first_frame.copy(), 1)
+        self._main_widget_stack.setVisible(True)
+    
+    def _mapCursorToSceneCoordinates(self, point):
+        return self._scene_widget.mapToScene(point)
+    
+    def _mapSceneCoordinatesToFramePixel(self, pointf):
+        scene_pixel = QPoint(
+            math.floor(pointf.x()),
+            math.floor(pointf.y())
+        )
+        
+        return (
+            scene_pixel if self._bg_item.boundingRect().contains(pointf)
+            else None
+        )
+    
+    def _mapCursorToFramePixel(self, point):
+        scene_coords = self._mapCursorToSceneCoordinates(point)
+        return self._mapSceneCoordinatesToFramePixel(scene_coords)
+    
+    def _frameViewMouseMoveEvent(self, event):
+        was_mouse_in_frame = self._mouse_in_frame
+        frame_pixel = self._mapCursorToFramePixel(QPoint(event.x(), event.y()))
+        self._mouse_in_frame = (frame_pixel is not None)
+        
+        if not self._mouse_in_frame:
+            if was_mouse_in_frame:
+                self.frame_mouse_leave.emit()
+            return
+        
+        self.frame_mouse_move.emit(frame_pixel.x(), frame_pixel.y())
         if (
             (self._editMode == self.EDIT_MODE_EYEDROPPER) and
             (event.buttons() & Qt.LeftButton)
         ):
             self.frame_eyedropper_color.emit(
                 QColor.fromRgb(self._frame_image_orig.pixel(
-                    scene_point.x(), scene_point.y()
+                    frame_pixel.x(), frame_pixel.y()
                 ))
             )
     
     def _frameViewMousePressEvent(self, event):
-        scene_point = self._scene_widget.mapToScene(
-            QPoint(event.x(), event.y())
-        ).toPoint()
-        if not self._frame_image_orig.rect().contains(scene_point):
-            if self._mouse_in_frame:
+        was_mouse_in_frame = self._mouse_in_frame
+        frame_pixel = self._mapCursorToFramePixel(QPoint(event.x(), event.y()))
+        self._mouse_in_frame = (frame_pixel is not None)
+        
+        if not self._mouse_in_frame:
+            if was_mouse_in_frame:
                 self.frame_mouse_leave.emit()
-                self._mouse_in_frame = False
             return
-            
-        self._mouse_in_frame = True
+        
         if self._editMode == self.EDIT_MODE_EYEDROPPER:
             self.frame_eyedropper_color.emit(
                 QColor.fromRgb(self._frame_image_orig.pixel(
-                    scene_point.x(), scene_point.y()
+                    frame_pixel.x(), frame_pixel.y()
                 ))
             )
     
     def _frameViewMouseReleaseEvent(self, event):
-        scene_point = self._scene_widget.mapToScene(
+        was_mouse_in_frame = self._mouse_in_frame
+        scene_coodinates = self._mapCursorToSceneCoordinates(
             QPoint(event.x(), event.y())
-        ).toPoint()
-        if not self._frame_image_orig.rect().contains(scene_point):
-            if self._mouse_in_frame:
+        )
+        frame_pixel = self._mapSceneCoordinatesToFramePixel(scene_coodinates)
+        self._mouse_in_frame = (frame_pixel is not None)
+        
+        if not self._mouse_in_frame:
+            if was_mouse_in_frame:
                 self.frame_mouse_leave.emit()
-                self._mouse_in_frame = False
             return
         
-        self._mouse_in_frame = True
         if self._editMode == self.EDIT_MODE_EYEDROPPER:
             self.frame_eyedropper_color.emit(
                 QColor.fromRgb(self._frame_image_orig.pixel(
-                    scene_point.x(), scene_point.y()
+                    frame_pixel.x(), frame_pixel.y()
                 ))
             )
         if self._editMode == self.EDIT_MODE_ADD_POINT:
             item = self._scene.itemAt(
-                scene_point.x(), scene_point.y(),
-                self._scene_widget.transform()
+                scene_coodinates, self._scene_widget.transform()
             )
             if isinstance(item, QGraphicsPixmapItem):
-                new_point = _FrontQtVideoFramePoint()
-                new_point.setPos(scene_point.x(), scene_point.y())
-                new_point.setZValue(1.0)
+                # Try to use some removed point
+                new_point = None
+                for item in self._scene.items():
+                    if not isinstance(item, _FrontQtVideoFramePoint):
+                        continue
+                    if item.isVisible():
+                        continue
+                    new_point = item
+                    break
+                
+                if new_point is None:
+                    new_point = _FrontQtVideoFramePoint()
+                    new_point.setPos(0, 0)
+                    new_point.setZValue(-2.0)
+                    new_point.setVisible(False)
+                    self._scene.addItem(new_point)
+                
+                # Position at the center of frame pixel
+                new_point_pos = (
+                    QPointF(frame_pixel) + QPointF(0.5, 0.5)
+                )
+                new_point.setPos(new_point_pos)
+                
                 new_point.setColor(self._current_color)
-                self._scene.addItem(new_point)
+                new_point.setZValue(1.0)
+                new_point.setVisible(True)
+                
         elif self._editMode == self.EDIT_MODE_REMOVE_POINT:
             item = self._scene.itemAt(
-                scene_point.x(), scene_point.y(),
-                self._scene_widget.transform()
+                scene_coodinates, self._scene_widget.transform()
             )
             if isinstance(item, _FrontQtVideoFramePoint):
-                item.setZValue(-2)
-                item.setVisible(False)             
+                item.setZValue(-2.0)
+                item.setVisible(False)
     
     def setEditMode(self, mode):
         self._editMode = mode
@@ -325,6 +442,111 @@ class FrontQtVideoFrameEditor(QFrame):
     def currentColor(self):
         return self._current_color
     
+    def previousFrame(self):
+        if self._vcap is None:
+            return
+        if self._current_frame <= 1:
+            return
+        
+        # Save current points
+        self._updatePoints(self._getCurrentPoints(), self._current_frame)
+        
+        # Load previous frame and its points
+        new_frame_index = self._current_frame - 1
+        self._updateCachedFrame(new_frame_index)
+        self._updateCachedPoints(new_frame_index)
+    
+    def nextFrame(self):
+        if self._vcap is None:
+            return
+        
+        # Save current points
+        self._updatePoints(self._getCurrentPoints(), self._current_frame)
+        
+        # Try to load next frame and its points
+        new_frame_index = self._current_frame + 1
+        try:
+            self._updateCachedFrame(new_frame_index)
+            self._updateCachedPoints(new_frame_index)
+        except KeyError:
+            _, frame = self._vcap.read()
+            if frame is None:
+                return
+            self._updateFrame(frame.copy(), new_frame_index)
+            self._updatePoints([], new_frame_index)
+    
+    def extrapolateNext(self):
+        if self._vcap is None:
+            return
+        
+        # Save current points
+        cpoints = self._getCurrentPoints()
+        self._updatePoints(cpoints, self._current_frame)
+        
+        # Try to load next frame and its points
+        new_frame_index = self._current_frame + 1
+        try:
+            self._updateCachedFrame(new_frame_index)
+        except KeyError:
+            _, frame = self._vcap.read()
+            if frame is None:
+                return
+            self._updateFrame(frame.copy(), new_frame_index)
+        
+        # Don't extrapolate if there are no points
+        if len(cpoints) == 0:
+            self.modelInference()
+            return
+        
+        lk_params = dict(
+            winSize = (15, 15), maxLevel = 2,
+            criteria = (
+                cv2.TermCriteria_EPS | cv2.TermCriteria_COUNT, 10, 0.03
+            )
+        )
+        
+        old_points = np.array([[[p['x'], p['y']]] for p in cpoints]).astype(
+            np.float32
+        )
+        old_gray = cv2.cvtColor(
+            self._frames_cache[new_frame_index - 1], cv2.COLOR_BGR2GRAY
+        )
+        new_gray = cv2.cvtColor(
+            self._frames_cache[new_frame_index], cv2.COLOR_BGR2GRAY
+        )
+        
+        new_points, st_new, err = cv2.calcOpticalFlowPyrLK(
+            old_gray, new_gray, old_points, None, **lk_params
+        )
+        new_points = new_points[:, 0, :]
+        
+        ERROR_THRESHOLD = 1e5
+        image_size = np.array(new_gray.shape[::-1], dtype = np.int)
+        
+        # Mark points excluded by algo
+        valid_points = (st_new.flatten() > 0)
+        # Mark points excluded by error threshold
+        valid_points &= (err.flatten() < ERROR_THRESHOLD)
+        
+        # Round and neighbour-adjust new pixels
+        new_pixels = new_points.round().astype(np.int)
+        new_pixels[new_pixels >= image_size] -= 1
+        new_pixels[new_pixels < 0] += 1
+        
+        # Mark pixels out of frame rect
+        valid_points &= (new_pixels >= 0).all(axis = 1).flatten()
+        valid_points &= (new_pixels < image_size).all(axis = 1).flatten()
+        
+        new_points = [
+            {
+                'x': new_pixels[i, 0], 'y': new_pixels[i, 1],
+                'color': cpoints[i]['color']
+            } for i in range(len(cpoints)) if valid_points[i]
+        ]
+        
+        self._setCurrentPoints(new_points)
+        self.modelInference()
+    
     def setModel(self, model, context):
         self._model = model
         self._model_context = context
@@ -363,14 +585,10 @@ class FrontQtVideoFrameEditor(QFrame):
             dtype = np.uint8
         )
         
-        for item in self._scene.items():
-            if not isinstance(item, _FrontQtVideoFramePoint):
-                continue
-            if not item.isVisible():
-                continue
-            
+        color_points = self._getCurrentPoints()
+        for color_point in color_points:
             point = (
-                np.array([item.x(), item.y()]) *
+                np.array([color_point['x'], color_point['y']]) *
                 self._model_context['load_size'] /
                 np.array(frame_gray_cv2.shape[1::-1])
             ).astype(np.uint)
@@ -382,8 +600,8 @@ class FrontQtVideoFrameEditor(QFrame):
             cv2.rectangle(
                 im, tl, br,
                 [
-                    item.color().red(), item.color().green(),
-                    item.color().blue()
+                    color_point['color'][0], color_point['color'][1],
+                    color_point['color'][2]
                 ],
                 -1
             )
