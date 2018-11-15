@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import json
 import math
 
 import cv2
@@ -7,12 +8,12 @@ import numpy as np
 
 from skimage import color as skcl
 
-from PyQt5.QtCore import pyqtSignal, Qt, QRectF, QPoint, QPointF
+from PyQt5.QtCore import pyqtSignal, Qt, QRect, QRectF, QPoint, QPointF
 from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
-    QColor, QPen, QBrush, QMouseEvent
+    QColor, QPen, QBrush, QMouseEvent, QIcon
 from PyQt5.QtWidgets import QFrame, QGraphicsView, QGraphicsScene, \
     QGraphicsItem, QVBoxLayout, QStyle, QGraphicsPixmapItem, QLabel, \
-    QStackedWidget
+    QStackedWidget, QSlider, QPushButton, QWidget, QHBoxLayout
 
 from .ui_thread_inference import FrontQtInferenceThread
 
@@ -96,6 +97,7 @@ class FrontQtVideoFrameEditor(QFrame):
     frame_eyedropper_color = pyqtSignal(QColor)
     frame_mouse_move = pyqtSignal(int, int)
     frame_mouse_leave = pyqtSignal()
+    frame_changed = pyqtSignal()
     
     EDIT_MODE_HAND = 0
     EDIT_MODE_EYEDROPPER = 1
@@ -115,6 +117,11 @@ class FrontQtVideoFrameEditor(QFrame):
         self._bg_item = self._scene.addPixmap(empty_pixmap)
         self._bg_item.setZValue(-1.0)
         
+        self._frame_slider.setMinimum(0)
+        self._frame_slider.setMaximum(0)
+        self._frame_slider.setEnabled(False)
+        self._frame_slider.valueChanged.connect(self.switchFrame)
+        
         self._main_widget_stack.setVisible(False)
         self._main_widget_stack.setCurrentIndex(0)
         
@@ -122,6 +129,10 @@ class FrontQtVideoFrameEditor(QFrame):
         self._frame_image_orig = None
         self._video_filename = ''
         self._mouse_in_frame = False
+        self._frames_cache = {}
+        self._points_cache = {}
+        self._current_frame = 0
+        self._setCurrentPoints([])
         
         self.setEditMode(self.EDIT_MODE_HAND)
         self.setSceneMode(self.SCENE_MODE_ORIGINAL)
@@ -133,13 +144,16 @@ class FrontQtVideoFrameEditor(QFrame):
         self.setAutoFillBackground(True)
         self.setBackgroundRole(QPalette.Dark)
         
+        self._video_frame = QFrame()
+        self._video_frame.setAutoFillBackground(True)
+        self._video_frame.setBackgroundRole(QPalette.Window)
+        self._video_frame.setFrameStyle(QFrame.Sunken | QFrame.StyledPanel)
+        
         self._scene_widget = _FrontQtVideoFrameViewport()
         self._scene_widget.setAutoFillBackground(True)
-        self._scene_widget.setBackgroundRole(QPalette.Window)
-        self._scene_widget.setVisible(False)
+        self._scene_widget.setBackgroundRole(QPalette.Dark)
         self._scene_widget.setMouseTracking(True)
         self._scene_widget.setInteractive(True)
-        self._scene_widget.setFrameStyle(QFrame.Sunken | QFrame.StyledPanel)
         
         self._scene_widget.mouse_moved.connect(self._frameViewMouseMoveEvent)
         self._scene_widget.mouse_pressed.connect(
@@ -148,6 +162,34 @@ class FrontQtVideoFrameEditor(QFrame):
         self._scene_widget.mouse_released.connect(
             self._frameViewMouseReleaseEvent
         )
+        
+        self._frame_slider = QSlider(Qt.Horizontal)
+        self._frame_slider.setFocusPolicy(Qt.StrongFocus)
+        self._frame_slider.setTickPosition(QSlider.NoTicks)
+        self._frame_slider.setSingleStep(1)
+        
+        self._prev_frame_button = QPushButton()
+        self._prev_frame_button.setToolTip('Previous frame')
+        self._prev_frame_button.setIcon(
+             QIcon('images/icons/16x16_color/control_start_blue.png')
+        )
+        self._prev_frame_button.clicked.connect(self.previousFrame)
+        
+        self._next_frame_button = QPushButton()
+        self._next_frame_button.setToolTip('Next frame')
+        self._next_frame_button.setIcon(
+             QIcon('images/icons/16x16_color/control_end_blue.png')
+        )
+        self._next_frame_button.clicked.connect(self.nextFrame)
+        
+        self._extrapolate_next_button = QPushButton()
+        self._extrapolate_next_button.setToolTip(
+            'Extrapolate points to next frame'
+        )
+        self._extrapolate_next_button.setIcon(
+              QIcon('images/icons/16x16_color/control_cursor_blue.png')
+        )
+        self._extrapolate_next_button.clicked.connect(self.extrapolateNext)
         
         self._scene = QGraphicsScene()
         self._scene_widget.setScene(self._scene)
@@ -161,8 +203,26 @@ class FrontQtVideoFrameEditor(QFrame):
             QFrame.Sunken | QFrame.StyledPanel
         )
         
+        playback_controls_layout = QHBoxLayout()
+        
+        placeholder_widget = QWidget()
+        playback_controls_layout.addWidget(placeholder_widget, 1)
+        
+        playback_controls_layout.addWidget(self._prev_frame_button)
+        playback_controls_layout.addWidget(self._next_frame_button)
+        playback_controls_layout.addWidget(self._extrapolate_next_button)
+        
+        placeholder_widget = QWidget()
+        playback_controls_layout.addWidget(placeholder_widget, 1)
+        
+        video_layout = QVBoxLayout()
+        video_layout.addWidget(self._scene_widget, 1)
+        video_layout.addWidget(self._frame_slider, 0)
+        video_layout.addLayout(playback_controls_layout, 0)
+        self._video_frame.setLayout(video_layout)
+        
         self._main_widget_stack = QStackedWidget()
-        self._main_widget_stack.insertWidget(0, self._scene_widget)
+        self._main_widget_stack.insertWidget(0, self._video_frame)
         self._main_widget_stack.insertWidget(1, self._calculation_widget)
         
         top_layout = QVBoxLayout()
@@ -177,14 +237,28 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self.reset()
     
-    def _updateFrame(self, frame, frame_index):
+    def _switchFrame(self, frame_index):
+        if self._vcap is None:
+            return
+        
+        if (frame_index < 1) or (frame_index > self.framesCount()):
+            raise Exception(
+                'Unable to switch to frame out of range (1, %u)' %
+                (self.framesCount())
+            )
+        
+        # Check for frame to be in cache
         if frame_index not in self._frames_cache:
-            self._frames_cache[frame_index] = None
-        # Cache frame
-        self._frames_cache[frame_index] = frame
-        self._updateCachedFrame(frame_index)
-    
-    def _updateCachedFrame(self, frame_index):
+            # Load frame from file in random access mode
+            self._vcap.set(cv2.CAP_PROP_POS_FRAMES, frame_index - 1)
+            _, frame = self._vcap.read()
+            if frame is None:
+                raise Exception(
+                    'Unable to extract frame %u' % (frame_index)
+                )
+            self._frames_cache[frame_index] = frame.copy()
+        
+        # Extract frame from cache
         frame = self._frames_cache[frame_index]
         # Set current frame
         self._current_frame = frame_index
@@ -209,6 +283,7 @@ class FrontQtVideoFrameEditor(QFrame):
         )
 
         self.setSceneMode(self.sceneMode())
+        self.frame_changed.emit()
     
     def _setCurrentPoints(self, points):
         items_list = []
@@ -264,24 +339,143 @@ class FrontQtVideoFrameEditor(QFrame):
         
         return points_list
     
-    def _updateCachedPoints(self, frame_index):
-        self._setCurrentPoints(self._points_cache[frame_index])
+    def _setCachedPoints(self, points, frame_index):
+        if self._vcap is None:
+            return
+        
+        if (frame_index < 1) or (frame_index > self.framesCount()):
+            raise Exception(
+                'Unable to set points for frame out of range (1, %u)' %
+                (self.framesCount())
+            )
+        
+        self._points_cache[frame_index] = points[:]
     
-    def _updatePoints(self, cached_points, frame_index):
-        self._points_cache[frame_index] = cached_points[:]
-        self._updateCachedPoints(frame_index)
+    def _switchPoints(self, frame_index):
+        if self._vcap is None:
+            return
+        
+        if (frame_index < 1) or (frame_index > self.framesCount()):
+            raise Exception(
+                'Unable to set points for frame out of range (1, %u)' %
+                (self.framesCount())
+            )
+        
+        if frame_index not in self._points_cache:
+            self._setCachedPoints([], frame_index)
+        
+        self._setCurrentPoints(self._points_cache[frame_index])
     
     def openVideoFile(self, filename):
         self.reset()
         
-        self._vcap = cv2.VideoCapture(filename)
-        self._frames_cache = {}
-        self._points_cache = {}
-        _, first_frame = self._vcap.read()
+        opened_vcap = cv2.VideoCapture(filename)
+        if not opened_vcap.isOpened():
+            return False
         
-        self._updateFrame(first_frame.copy(), 1)
+        self._frame_slider.setMinimum(1)
+        self._frame_slider.setMaximum(
+            int(opened_vcap.get(cv2.CAP_PROP_FRAME_COUNT))
+        )
+        self._frame_slider.setValue(self._frame_slider.minimum())
+        
+        self._vcap = opened_vcap
+        self._video_filename = filename
+        self._switchFrame(1)
+        
+        self._frame_slider.setEnabled(
+            self._frame_slider.minimum() < self._frame_slider.maximum()
+        )
+        
         self._main_widget_stack.setVisible(True)
+        return True
+        
+    def openProject(self, filename):
+        with open(filename, 'r') as f:
+            project_file_dict = json.loads(f.read())
+        
+        self.openVideoFile(project_file_dict['video_file'])
+        for frame_index in project_file_dict['color_points']:
+            frame_points = [
+                {
+                    'x': fp['point'][0],
+                    'y': fp['point'][1],
+                    'color': fp['color'][:]
+                } for fp in project_file_dict['color_points']
+            ]
+            self._setCachedPoints(frame_points, frame_index)
+        
+        self.switchFrame(project_file_dict['current_frame'])
     
+    def saveProject(self, filename):
+        if self._vcap is None:
+            raise Exception('Unable to save project for no video loaded')
+        
+        project_file_dict = {
+            'video_file': self._video_filename,
+            'current_frame': self._current_frame,
+            'color_points' : {}
+        }
+        
+        for frame_index in self._points_cache:
+            color_points = self._points_cache[frame_index]
+            if len(color_points) == 0:
+                continue
+            
+            frame_points_list = [
+                {
+                    'point': (cp['x'], cp['y']),
+                    'color': cp['color'][:]
+                } for cp in color_points
+            ]
+            
+            project_file_dict['color_points'][frame_index] = \
+            frame_points_list
+        
+        with open(filename, 'w') as o:
+            o.write(json.dumps(project_file_dict))
+    
+    def exportColorPoints(self, filename):
+        color_points = self._getCurrentPoints()
+        output_points = [
+            {
+                'point': (p['x'], p['y']),
+                'color': (p['color'][0], p['color'][1], p['color'][2]),
+                'user_color': (p['color'][0], p['color'][1], p['color'][2])
+            } for p in color_points
+        ]
+        
+        with open(filename, 'w') as o:
+            o.write(json.dumps(output_points))
+        
+    def importColorPoints(self, filename):
+        with open(filename, 'r') as f:
+            file_points = json.loads(f.read())
+        
+        color_points = []
+        image_rect = QRect(
+            0, 0,
+            self._frame_image_orig.width() - 1,
+            self._frame_image_orig.height() - 1
+        )
+        
+        for fp in file_points:
+            color_point_dict = {
+                'x': fp['point'][0],
+                'y': fp['point'][1]
+            }
+            
+            if not image_rect.contains(fp['point'][0], fp['point'][1]):
+                continue
+            
+            color_point_dict['color'] = [
+                fp['color'][0], fp['color'][1], fp['color'][2]
+            ]
+            
+            color_points.append(color_point_dict)
+        
+        self._setCurrentPoints(color_points)
+            
     def _mapCursorToSceneCoordinates(self, point):
         return self._scene_widget.mapToScene(point)
     
@@ -302,7 +496,10 @@ class FrontQtVideoFrameEditor(QFrame):
     
     def _frameViewMouseMoveEvent(self, event):
         was_mouse_in_frame = self._mouse_in_frame
-        frame_pixel = self._mapCursorToFramePixel(QPoint(event.x(), event.y()))
+        scene_coodinates = self._mapCursorToSceneCoordinates(
+            QPoint(event.x(), event.y())
+        )
+        frame_pixel = self._mapSceneCoordinatesToFramePixel(scene_coodinates)
         self._mouse_in_frame = (frame_pixel is not None)
         
         if not self._mouse_in_frame:
@@ -315,15 +512,24 @@ class FrontQtVideoFrameEditor(QFrame):
             (self._editMode == self.EDIT_MODE_EYEDROPPER) and
             (event.buttons() & Qt.LeftButton)
         ):
-            self.frame_eyedropper_color.emit(
-                QColor.fromRgb(self._frame_image_orig.pixel(
-                    frame_pixel.x(), frame_pixel.y()
-                ))
+            item = self._scene.itemAt(
+                scene_coodinates, self._scene_widget.transform()
             )
+            if isinstance(item, QGraphicsPixmapItem):
+                self.frame_eyedropper_color.emit(
+                    QColor.fromRgb(self._frame_image_orig.pixel(
+                        frame_pixel.x(), frame_pixel.y()
+                    ))
+                )
+            elif isinstance(item, _FrontQtVideoFramePoint):
+                self.frame_eyedropper_color.emit(item.color())
     
     def _frameViewMousePressEvent(self, event):
         was_mouse_in_frame = self._mouse_in_frame
-        frame_pixel = self._mapCursorToFramePixel(QPoint(event.x(), event.y()))
+        scene_coodinates = self._mapCursorToSceneCoordinates(
+            QPoint(event.x(), event.y())
+        )
+        frame_pixel = self._mapSceneCoordinatesToFramePixel(scene_coodinates)
         self._mouse_in_frame = (frame_pixel is not None)
         
         if not self._mouse_in_frame:
@@ -332,11 +538,17 @@ class FrontQtVideoFrameEditor(QFrame):
             return
         
         if self._editMode == self.EDIT_MODE_EYEDROPPER:
-            self.frame_eyedropper_color.emit(
-                QColor.fromRgb(self._frame_image_orig.pixel(
-                    frame_pixel.x(), frame_pixel.y()
-                ))
+            item = self._scene.itemAt(
+                scene_coodinates, self._scene_widget.transform()
             )
+            if isinstance(item, QGraphicsPixmapItem):
+                self.frame_eyedropper_color.emit(
+                    QColor.fromRgb(self._frame_image_orig.pixel(
+                        frame_pixel.x(), frame_pixel.y()
+                    ))
+                )
+            elif isinstance(item, _FrontQtVideoFramePoint):
+                self.frame_eyedropper_color.emit(item.color())
     
     def _frameViewMouseReleaseEvent(self, event):
         was_mouse_in_frame = self._mouse_in_frame
@@ -352,12 +564,19 @@ class FrontQtVideoFrameEditor(QFrame):
             return
         
         if self._editMode == self.EDIT_MODE_EYEDROPPER:
-            self.frame_eyedropper_color.emit(
-                QColor.fromRgb(self._frame_image_orig.pixel(
-                    frame_pixel.x(), frame_pixel.y()
-                ))
+            item = self._scene.itemAt(
+                scene_coodinates, self._scene_widget.transform()
             )
-        if self._editMode == self.EDIT_MODE_ADD_POINT:
+            if isinstance(item, QGraphicsPixmapItem):
+                self.frame_eyedropper_color.emit(
+                    QColor.fromRgb(self._frame_image_orig.pixel(
+                        frame_pixel.x(), frame_pixel.y()
+                    ))
+                )
+            elif isinstance(item, _FrontQtVideoFramePoint):
+                self.frame_eyedropper_color.emit(item.color())
+        
+        elif self._editMode == self.EDIT_MODE_ADD_POINT:
             item = self._scene.itemAt(
                 scene_coodinates, self._scene_widget.transform()
             )
@@ -396,6 +615,9 @@ class FrontQtVideoFrameEditor(QFrame):
             if isinstance(item, _FrontQtVideoFramePoint):
                 item.setZValue(-2.0)
                 item.setVisible(False)
+    
+    def currentFilename(self):
+        return self._video_filename
     
     def setEditMode(self, mode):
         self._editMode = mode
@@ -442,57 +664,46 @@ class FrontQtVideoFrameEditor(QFrame):
     def currentColor(self):
         return self._current_color
     
+    def switchFrame(self, frame_index):
+        if self._vcap is None:
+            return
+        
+        # Save current points
+        self._setCachedPoints(self._getCurrentPoints(), self._current_frame)
+        # Switch frame
+        self._switchFrame(frame_index)
+        # Switch points
+        self._switchPoints(frame_index)
+        # Change slider value
+        self._frame_slider.setValue(frame_index)
+    
     def previousFrame(self):
         if self._vcap is None:
             return
         if self._current_frame <= 1:
             return
         
-        # Save current points
-        self._updatePoints(self._getCurrentPoints(), self._current_frame)
-        
-        # Load previous frame and its points
-        new_frame_index = self._current_frame - 1
-        self._updateCachedFrame(new_frame_index)
-        self._updateCachedPoints(new_frame_index)
+        self.switchFrame(self._current_frame - 1)
     
     def nextFrame(self):
         if self._vcap is None:
             return
+        if self._current_frame >= self.framesCount():
+            return
         
-        # Save current points
-        self._updatePoints(self._getCurrentPoints(), self._current_frame)
-        
-        # Try to load next frame and its points
-        new_frame_index = self._current_frame + 1
-        try:
-            self._updateCachedFrame(new_frame_index)
-            self._updateCachedPoints(new_frame_index)
-        except KeyError:
-            _, frame = self._vcap.read()
-            if frame is None:
-                return
-            self._updateFrame(frame.copy(), new_frame_index)
-            self._updatePoints([], new_frame_index)
+        self.switchFrame(self._current_frame + 1)
     
     def extrapolateNext(self):
         if self._vcap is None:
             return
+        if self._current_frame >= self.framesCount():
+            return
         
-        # Save current points
-        cpoints = self._getCurrentPoints()
-        self._updatePoints(cpoints, self._current_frame)
-        
-        # Try to load next frame and its points
         new_frame_index = self._current_frame + 1
-        try:
-            self._updateCachedFrame(new_frame_index)
-        except KeyError:
-            _, frame = self._vcap.read()
-            if frame is None:
-                return
-            self._updateFrame(frame.copy(), new_frame_index)
+        self.switchFrame(new_frame_index)
         
+        # Extract points of the prevous frame
+        cpoints = self._points_cache[new_frame_index - 1]
         # Don't extrapolate if there are no points
         if len(cpoints) == 0:
             self.modelInference()
@@ -544,8 +755,17 @@ class FrontQtVideoFrameEditor(QFrame):
             } for i in range(len(cpoints)) if valid_points[i]
         ]
         
+        # Set calculated points ans new ones for the frame
+        self._setCachedPoints(new_points, new_frame_index)
+        # Update on sceeen
         self._setCurrentPoints(new_points)
         self.modelInference()
+    
+    def currentFrame(self):
+        return self._current_frame
+    
+    def framesCount(self):
+        return self._frame_slider.maximum()
     
     def setModel(self, model, context):
         self._model = model

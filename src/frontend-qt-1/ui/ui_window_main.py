@@ -4,7 +4,7 @@ from PyQt5.QtCore import Qt, QSignalMapper
 from PyQt5.QtGui import QColor, QIcon
 from PyQt5.QtWidgets import QMainWindow, QAction, QMenu, QMessageBox, qApp, \
     QLabel, QDockWidget, QToolButton, QPushButton, QGridLayout, QFrame, \
-    QColorDialog
+    QColorDialog, QFileDialog
 
 from .ui_dialog_new_project import FrontQtDialogNewProject
 from .ui_widget_video_frame_editor import FrontQtVideoFrameEditor
@@ -19,16 +19,19 @@ class FrontQtWindowMain(QMainWindow):
         self._actNew.triggered.connect(self._newProject)
         
         self._actOpen = QAction('&Open project...')
-        self._actOpen.setEnabled(False) # Not implemented
-        
-        self._actSave = QAction('&Save project')
-        self._actSave.setEnabled(False) # Not implemented
+        self._actOpen.triggered.connect(self._openProject)
         
         self._actSaveAs = QAction('Save project &as...')
-        self._actSaveAs.setEnabled(False) # Not implemented
+        self._actSaveAs.triggered.connect(self._saveProjectAs)
         
         self._actQuit = QAction('&Quit')
         self._actQuit.triggered.connect(self.close)
+        
+        self._actExportFramePoints = QAction('E&xport frame points...')
+        self._actExportFramePoints.triggered.connect(self._exportColorPoints)
+        
+        self._actImportFramePoints = QAction('I&mport frame points...')
+        self._actImportFramePoints.triggered.connect(self._importColorPoints)
         
         self._actAbout = QAction('&About...')
         self._actAbout.triggered.connect(self.about)
@@ -40,8 +43,10 @@ class FrontQtWindowMain(QMainWindow):
         self._mnuFile = QMenu('&File')
         self._mnuFile.addAction(self._actNew)
         self._mnuFile.addAction(self._actOpen)
-        self._mnuFile.addAction(self._actSave)
         self._mnuFile.addAction(self._actSaveAs)
+        self._mnuFile.addSeparator()
+        self._mnuFile.addAction(self._actExportFramePoints)
+        self._mnuFile.addAction(self._actImportFramePoints)
         self._mnuFile.addSeparator()
         self._mnuFile.addAction(self._actQuit)
         
@@ -62,6 +67,9 @@ class FrontQtWindowMain(QMainWindow):
         self._wgtFrameEditor.frame_eyedropper_color.connect(
             self._setPickedColor
         )
+        self._wgtFrameEditor.frame_changed.connect(
+            self._videoFrameChanged
+        )
         
         self.setCentralWidget(self._wgtFrameEditor)
     
@@ -72,7 +80,11 @@ class FrontQtWindowMain(QMainWindow):
         self._lblImagePos.setFixedWidth(self._lblImagePos.width())
         self._lblImagePos.setText('')
         
+        self._lblVideoPos = QLabel()
+        self._lblVideoPos.setText('Frame: 0/0')
+        
         self.statusBar().addPermanentWidget(self._lblImagePos)
+        self.statusBar().addPermanentWidget(self._lblVideoPos)
     
     def _createPaintDock(self):
         self._dwgPaint = QDockWidget('Painting', self)
@@ -192,53 +204,6 @@ class FrontQtWindowMain(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, self._dwgView)
         self._mnuView.addAction(self._dwgView.toggleViewAction())
     
-    def _createPlaybackDock(self):
-        self._dwgPlayback = QDockWidget('Playback', self)
-        self._dwgPlayback.setAllowedAreas(
-            Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea
-        )
-        
-        dockLayout = QGridLayout()
-        
-        self._tbtnPreviousFrame = QToolButton()
-        self._tbtnPreviousFrame.setToolTip('Previous frame')
-        self._tbtnPreviousFrame.setIcon(
-            QIcon('images/icons/16x16_color/control_start_blue.png')
-        )
-        self._tbtnPreviousFrame.clicked.connect(
-            self._wgtFrameEditor.previousFrame
-        )
-        dockLayout.addWidget(self._tbtnPreviousFrame, 0, 0)
-        
-        self._tbtnNextFrame = QToolButton()
-        self._tbtnNextFrame.setToolTip('Next frame')
-        self._tbtnNextFrame.setIcon(
-            QIcon('images/icons/16x16_color/control_end_blue.png')
-        )
-        self._tbtnNextFrame.clicked.connect(
-            self._wgtFrameEditor.nextFrame
-        )
-        dockLayout.addWidget(self._tbtnNextFrame, 0, 1)
-        
-        self._tbtnExtrapolateNext = QToolButton()
-        self._tbtnExtrapolateNext.setToolTip(
-            'Extrapolate points to next frame'
-        )
-        self._tbtnExtrapolateNext.setIcon(
-            QIcon('images/icons/16x16_color/control_cursor_blue.png')
-        )
-        self._tbtnExtrapolateNext.clicked.connect(
-            self._wgtFrameEditor.extrapolateNext
-        )
-        dockLayout.addWidget(self._tbtnExtrapolateNext, 0, 2)
-        
-        dockFrame = QFrame()
-        dockFrame.setLayout(dockLayout)
-        
-        self._dwgPlayback.setWidget(dockFrame)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self._dwgPlayback)
-        self._mnuView.addAction(self._dwgPlayback.toggleViewAction())
-    
     def _initModel(self, model, model_context):        
         self._wgtFrameEditor.setModel(model, model_context)
     
@@ -272,9 +237,13 @@ class FrontQtWindowMain(QMainWindow):
         if self._dlgNewProject.exec() == 0:
             return
         
-        self._wgtFrameEditor.openVideoFile(
+        if not self._wgtFrameEditor.openVideoFile(
             self._dlgNewProject.getVideoFilename()
-        )
+        ):
+            QMessageBox.critical(
+                self, 'New project', 'Unable to open video <b>%s</b>.' %
+                (self._dlgNewProject.getVideoFilename())
+            )
     
     def _frameMouseMove(self, x, y):
         self._lblImagePos.setText('X: %4d Y: %4d' % (x, y))
@@ -291,6 +260,53 @@ class FrontQtWindowMain(QMainWindow):
         self._wgtFrameEditor.setSceneMode(scene_mode)
         for key in self._sceneModesList:
             self._sceneModeButtons[key].setChecked(key == scene_mode)
+    
+    def _videoFrameChanged(self):
+        self._lblVideoPos.setText(
+            'Frame: %u/%u' % (
+                self._wgtFrameEditor.currentFrame(),
+                self._wgtFrameEditor.framesCount()
+            )
+        )
+        self._lblVideoPos.adjustSize()
+    
+    def _openProject(self):
+        project_filename = QFileDialog.getOpenFileName(
+            self, 'Open project file'
+        )
+        if len(project_filename[0]) == 0:
+            return
+        self._wgtFrameEditor.openProject(project_filename)
+    
+    def _saveProjectAs(self):
+        if len(self._wgtFrameEditor.currentFilename()) == 0:
+            return
+        project_filename = QFileDialog.getSaveFileName(
+            self, 'Save project file'
+        )
+        if len(project_filename[0]) == 0:
+            return
+        self._wgtFrameEditor.saveProject(project_filename)
+    
+    def _exportColorPoints(self):
+        if len(self._wgtFrameEditor.currentFilename()) == 0:
+            return
+        project_filename = QFileDialog.getSaveFileName(
+            self, 'Export color points file'
+        )
+        if len(project_filename[0]) == 0:
+            return
+        self._wgtFrameEditor.exportColorPoints(project_filename[0])
+    
+    def _importColorPoints(self):
+        if len(self._wgtFrameEditor.currentFilename()) == 0:
+            return
+        project_filename = QFileDialog.getOpenFileName(
+            self, 'Import color points file'
+        )
+        if len(project_filename[0]) == 0:
+            return
+        self._wgtFrameEditor.importColorPoints(project_filename[0])
     
     def __init__(self, model = None, model_context = None):
         QMainWindow.__init__(self)
@@ -316,7 +332,6 @@ class FrontQtWindowMain(QMainWindow):
         self._createBackground()
         self._createPaintDock()
         self._createViewDock()
-        self._createPlaybackDock()
         self._initModel(model, model_context)
         
         self.setWindowTitle('Qt Frontend')
