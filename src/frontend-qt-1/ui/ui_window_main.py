@@ -16,25 +16,49 @@ class FrontQtWindowMain(QMainWindow):
     
     def _createActions(self):
         self._actNew = QAction('&New project...')
+        self._actNew.setShortcut('Ctrl+N')
         self._actNew.triggered.connect(self._newProject)
         
         self._actOpen = QAction('&Open project...')
+        self._actOpen.setShortcut('Ctrl+O')
         self._actOpen.triggered.connect(self._openProject)
         
         self._actSaveAs = QAction('Save project &as...')
+        self._actSaveAs.setShortcut('Ctrl+S')
         self._actSaveAs.triggered.connect(self._saveProjectAs)
         
         self._actQuit = QAction('&Quit')
         self._actQuit.triggered.connect(self.close)
         
-        self._actExportVideo = QAction('Export &video...')
+        self._actExportVideo = QAction('E&xport video...')
+        self._actExportVideo.setShortcut('Ctrl+X')
         self._actExportVideo.triggered.connect(self._exportInferencedVideo)
         
-        self._actExportFramePoints = QAction('E&xport frame points...')
+        self._actExportFramePoints = QAction('Export &frame points...')
+        self._actExportFramePoints.setShortcut('Ctrl+F')
         self._actExportFramePoints.triggered.connect(self._exportColorPoints)
         
         self._actImportFramePoints = QAction('I&mport frame points...')
+        self._actImportFramePoints.setShortcut('Ctrl+M')
         self._actImportFramePoints.triggered.connect(self._importColorPoints)
+        
+        self._actDeleteSelected = QAction('&Delete')
+        self._actDeleteSelected.setShortcut('Del')
+        self._actDeleteSelected.triggered.connect(
+            self._wgtFrameEditor.deleteSelectedPoints
+        )
+        
+        self._actCopySelected = QAction('&Copy')
+        self._actCopySelected.setShortcut('Ctrl+C')
+        self._actCopySelected.triggered.connect(
+            self._wgtFrameEditor.copySelectedPoints
+        )
+        
+        self._actPaste = QAction('&Paste')
+        self._actPaste.setShortcut('Ctrl+V')
+        self._actPaste.triggered.connect(
+            self._wgtFrameEditor.pastePoints
+        )
         
         self._actAbout = QAction('&About...')
         self._actAbout.triggered.connect(self.about)
@@ -54,6 +78,11 @@ class FrontQtWindowMain(QMainWindow):
         self._mnuFile.addSeparator()
         self._mnuFile.addAction(self._actQuit)
         
+        self._mnuEdit = QMenu('&Edit')
+        self._mnuEdit.addAction(self._actDeleteSelected)
+        self._mnuEdit.addAction(self._actCopySelected)
+        self._mnuEdit.addAction(self._actPaste)
+        
         self._mnuView = QMenu('&View')
         
         self._mnuHelp = QMenu('&Help')
@@ -61,6 +90,7 @@ class FrontQtWindowMain(QMainWindow):
         self._mnuHelp.addAction(self._actAboutQt)
         
         self.menuBar().addMenu(self._mnuFile)
+        self.menuBar().addMenu(self._mnuEdit)
         self.menuBar().addMenu(self._mnuView)
         self.menuBar().addMenu(self._mnuHelp)
     
@@ -280,7 +310,7 @@ class FrontQtWindowMain(QMainWindow):
         )
         if len(project_filename[0]) == 0:
             return
-        self._wgtFrameEditor.openProject(project_filename)
+        self._wgtFrameEditor.openProject(project_filename[0])
     
     def _saveProjectAs(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
@@ -290,7 +320,7 @@ class FrontQtWindowMain(QMainWindow):
         )
         if len(project_filename[0]) == 0:
             return
-        self._wgtFrameEditor.saveProject(project_filename)
+        self._wgtFrameEditor.saveProject(project_filename[0])
     
     def _exportInferencedVideo(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
@@ -341,11 +371,11 @@ class FrontQtWindowMain(QMainWindow):
             FrontQtVideoFrameEditor.SCENE_MODE_COLORIZED
         )
         
+        self._createBackground()
         self._createDialogs()
         self._createActions()
         self._createMenu()
         self._createStatusBar()
-        self._createBackground()
         self._createPaintDock()
         self._createViewDock()
         self._initModel(model, model_context)

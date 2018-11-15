@@ -11,7 +11,7 @@ from skimage import color as skcl
 
 from PyQt5.QtCore import pyqtSignal, Qt, QRect, QRectF, QPoint, QPointF
 from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
-    QColor, QPen, QBrush, QMouseEvent, QIcon
+    QColor, QPen, QBrush, QMouseEvent, QIcon, QPainter
 from PyQt5.QtWidgets import qApp, QFrame, QGraphicsView, QGraphicsScene, \
     QGraphicsItem, QVBoxLayout, QStyle, QGraphicsPixmapItem, QLabel, \
     QStackedWidget, QSlider, QPushButton, QWidget, QHBoxLayout, QFormLayout, \
@@ -38,12 +38,27 @@ class _FrontQtVideoFramePoint(QGraphicsItem):
         brush = painter.brush()
         pen = painter.pen()
         
-        new_pen = QPen(Qt.black)
-        new_pen.setWidth(1 if option.state & QStyle.State_Selected else 0)
-        new_brush = QBrush(self._color)
+        new_pen = QPen(Qt.white)
+        new_pen.setWidth(0)
+        new_brush = QBrush(Qt.white)
         
+        if option.state & QStyle.State_Selected:
+            painter.setPen(new_pen)
+            painter.setBrush(new_brush)
+            
+            outerRect = self.boundingRect()
+            outerRect.setTopLeft(outerRect.topLeft() - QPointF(1.0, 1.0))
+            outerRect.setBottomRight(
+                outerRect.bottomRight() + QPointF(1.0, 1.0)
+            )
+            
+            painter.drawEllipse(outerRect)
+        
+        new_pen.setColor(Qt.black)
+        new_brush.setColor(self._color)
         painter.setPen(new_pen)
         painter.setBrush(new_brush)
+        
         painter.drawEllipse(self.boundingRect())
         
         painter.setBrush(brush)
@@ -115,6 +130,17 @@ class FrontQtVideoFrameEditor(QFrame):
     VIDEO_FORMAT_X264 = 1
     
     def reset(self):
+        self._vcap = None
+        self._frame_image_orig = None
+        self._video_filename = ''
+        self._mouse_in_frame = False
+        self._frames_cache = {}
+        self._points_cache = {}
+        self._points_clipboard = []
+        self._current_frame = 0
+        self._export_cancelled = False
+        self._setCurrentPoints([])
+        
         empty_pixmap = QPixmap(16, 16)
         empty_pixmap.fill(Qt.black)
         
@@ -129,16 +155,6 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._main_widget_stack.setVisible(False)
         self._main_widget_stack.setCurrentIndex(0)
-        
-        self._vcap = None
-        self._frame_image_orig = None
-        self._video_filename = ''
-        self._mouse_in_frame = False
-        self._frames_cache = {}
-        self._points_cache = {}
-        self._current_frame = 0
-        self._export_cancelled = False
-        self._setCurrentPoints([])
         
         self.setEditMode(self.EDIT_MODE_HAND)
         self.setSceneMode(self.SCENE_MODE_ORIGINAL)
@@ -502,13 +518,8 @@ class FrontQtVideoFrameEditor(QFrame):
             
             self._preprocess_model_input()
             self._export_thread.start()
-            while not (
-                self._export_cancelled or self._export_thread.isFinished()
-            ):
+            while not self._export_thread.isFinished():
                 qApp.processEvents()
-            
-            if self._export_cancelled:
-                break
             
             self._postprocess_model_output()
             output_frame = cv2.cvtColor(
@@ -519,6 +530,8 @@ class FrontQtVideoFrameEditor(QFrame):
             )
             
             self._export_video_progress.setValue(frame_index)
+            if self._export_cancelled:
+                break
         
         self.switchFrame(current_frame)
         self._main_widget_stack.setCurrentIndex(0)
@@ -528,17 +541,20 @@ class FrontQtVideoFrameEditor(QFrame):
             project_file_dict = json.loads(f.read())
         
         self.openVideoFile(project_file_dict['video_file'])
+        
         for frame_index in project_file_dict['color_points']:
             frame_points = [
                 {
-                    'x': fp['point'][0],
-                    'y': fp['point'][1],
-                    'color': fp['color'][:]
-                } for fp in project_file_dict['color_points']
+                    'x': int(fp['point'][0]),
+                    'y': int(fp['point'][1]),
+                    'color': [int(c) for c in fp['color']]
+                } for fp in project_file_dict['color_points'][frame_index]
             ]
-            self._setCachedPoints(frame_points, frame_index)
+            self._setCachedPoints(frame_points, int(frame_index))
+            if int(frame_index) == self._current_frame:
+                self._setCurrentPoints(frame_points)
         
-        self.switchFrame(project_file_dict['current_frame'])
+        self.switchFrame(int(project_file_dict['current_frame']))
     
     def saveProject(self, filename):
         if self._vcap is None:
@@ -546,7 +562,7 @@ class FrontQtVideoFrameEditor(QFrame):
         
         project_file_dict = {
             'video_file': self._video_filename,
-            'current_frame': self._current_frame,
+            'current_frame': int(self._current_frame),
             'color_points' : {}
         }
         
@@ -557,8 +573,8 @@ class FrontQtVideoFrameEditor(QFrame):
             
             frame_points_list = [
                 {
-                    'point': (cp['x'], cp['y']),
-                    'color': cp['color'][:]
+                    'point': (int(cp['x']), int(cp['y'])),
+                    'color': [int(c) for c in cp['color']]
                 } for cp in color_points
             ]
             
@@ -766,6 +782,56 @@ class FrontQtVideoFrameEditor(QFrame):
     
     def editMode(self):
         return self._editMode
+    
+    def deleteSelectedPoints(self):
+        if self._vcap is None:
+            return
+        
+        selected_points = self._scene.selectedItems()
+        for point in selected_points:
+            point.setPos(0.0, 0.0)
+            point.setZValue(-2.0)
+            point.setVisible(False)
+        
+        self._scene.clearSelection()
+        self._scene.update()
+    
+    def copySelectedPoints(self):
+        if self._vcap is None:
+            return
+        
+        selected_points = self._scene.selectedItems()
+        if len(selected_points) == 0:
+            return
+        
+        self._points_clipboard = []
+        for point in selected_points:
+            point_dict = {
+                'x': math.floor(point.x()),
+                'y': math.floor(point.y()),
+                'color': [
+                    point.color().red(),
+                    point.color().green(),
+                    point.color().blue()
+                ]
+            }
+            self._points_clipboard.append(point_dict)
+        
+        self._scene.clearSelection()
+    
+    def pastePoints(self):
+        if self._vcap is None:
+            return
+        if len(self._points_clipboard) == 0:
+            return
+        
+        points = self._getCurrentPoints()
+        points.extend(self._points_clipboard)
+        self._setCurrentPoints(points)
+        
+        # ToDo: select pasted points
+        self._scene.clearSelection()
+        self._scene.update()
     
     def setSceneMode(self, mode):
         self._sceneMode = mode
