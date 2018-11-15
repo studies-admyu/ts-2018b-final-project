@@ -27,6 +27,9 @@ class FrontQtWindowMain(QMainWindow):
         self._actQuit = QAction('&Quit')
         self._actQuit.triggered.connect(self.close)
         
+        self._actExportVideo = QAction('Export &video...')
+        self._actExportVideo.triggered.connect(self._exportInferencedVideo)
+        
         self._actExportFramePoints = QAction('E&xport frame points...')
         self._actExportFramePoints.triggered.connect(self._exportColorPoints)
         
@@ -45,6 +48,7 @@ class FrontQtWindowMain(QMainWindow):
         self._mnuFile.addAction(self._actOpen)
         self._mnuFile.addAction(self._actSaveAs)
         self._mnuFile.addSeparator()
+        self._mnuFile.addAction(self._actExportVideo)
         self._mnuFile.addAction(self._actExportFramePoints)
         self._mnuFile.addAction(self._actImportFramePoints)
         self._mnuFile.addSeparator()
@@ -204,7 +208,7 @@ class FrontQtWindowMain(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, self._dwgView)
         self._mnuView.addAction(self._dwgView.toggleViewAction())
     
-    def _initModel(self, model, model_context):        
+    def _initModel(self, model, model_context):
         self._wgtFrameEditor.setModel(model, model_context)
     
     def reset(self):
@@ -287,6 +291,18 @@ class FrontQtWindowMain(QMainWindow):
         if len(project_filename[0]) == 0:
             return
         self._wgtFrameEditor.saveProject(project_filename)
+    
+    def _exportInferencedVideo(self):
+        if len(self._wgtFrameEditor.currentFilename()) == 0:
+            return
+        output_video_filename = QFileDialog.getSaveFileName(
+            self, 'Export video'
+        )
+        if len(output_video_filename[0]) == 0:
+            return
+        self._wgtFrameEditor.exportInferencedVideo(
+            output_video_filename[0], 0
+        )
     
     def _exportColorPoints(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:

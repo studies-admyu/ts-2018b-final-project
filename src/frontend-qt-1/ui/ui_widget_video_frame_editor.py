@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 
 import cv2
 import numpy as np
@@ -11,9 +12,10 @@ from skimage import color as skcl
 from PyQt5.QtCore import pyqtSignal, Qt, QRect, QRectF, QPoint, QPointF
 from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
     QColor, QPen, QBrush, QMouseEvent, QIcon
-from PyQt5.QtWidgets import QFrame, QGraphicsView, QGraphicsScene, \
+from PyQt5.QtWidgets import qApp, QFrame, QGraphicsView, QGraphicsScene, \
     QGraphicsItem, QVBoxLayout, QStyle, QGraphicsPixmapItem, QLabel, \
-    QStackedWidget, QSlider, QPushButton, QWidget, QHBoxLayout
+    QStackedWidget, QSlider, QPushButton, QWidget, QHBoxLayout, QFormLayout, \
+    QLineEdit, QProgressBar
 
 from .ui_thread_inference import FrontQtInferenceThread
 
@@ -109,6 +111,9 @@ class FrontQtVideoFrameEditor(QFrame):
     SCENE_MODE_GRAYSCALE = 1
     SCENE_MODE_COLORIZED = 2
     
+    VIDEO_FORMAT_PNG_SEQUENCE = 0,
+    VIDEO_FORMAT_X264 = 1
+    
     def reset(self):
         empty_pixmap = QPixmap(16, 16)
         empty_pixmap.fill(Qt.black)
@@ -132,6 +137,7 @@ class FrontQtVideoFrameEditor(QFrame):
         self._frames_cache = {}
         self._points_cache = {}
         self._current_frame = 0
+        self._export_cancelled = False
         self._setCurrentPoints([])
         
         self.setEditMode(self.EDIT_MODE_HAND)
@@ -203,6 +209,53 @@ class FrontQtVideoFrameEditor(QFrame):
             QFrame.Sunken | QFrame.StyledPanel
         )
         
+        self._export_widget = QFrame()
+        self._export_widget.setAutoFillBackground(True)
+        self._export_widget.setBackgroundRole(QPalette.Window)
+        self._export_widget.setFrameStyle(QFrame.Sunken | QFrame.StyledPanel)
+        
+        self._export_video_edit = QLineEdit()
+        self._export_video_edit.setText('/home')
+        self._export_video_edit.setReadOnly(True)
+        edit_palette = self._export_video_edit.palette()
+        edit_palette.setColor(
+            self._export_video_edit.backgroundRole(),
+            self._export_widget.palette().color(
+                self._export_widget.backgroundRole()
+            )
+        )
+        self._export_video_edit.setPalette(edit_palette)
+        
+        self._export_video_frame_edit = QLineEdit()
+        self._export_video_frame_edit.setText('0 / 0')
+        self._export_video_frame_edit.setReadOnly(True)
+        self._export_video_frame_edit.setPalette(
+            self._export_video_edit.palette()
+        )
+        
+        self._export_video_progress = QProgressBar()
+        
+        self._export_video_cancel_button = QPushButton('Cancel')
+        self._export_video_cancel_button.clicked.connect(
+            self._exportInferencedVideoCancel
+        )
+        
+        export_layout = QVBoxLayout()
+        
+        export_details_layout = QFormLayout()
+        export_details_layout.addRow('Output video:', self._export_video_edit)
+        export_details_layout.addRow(
+            'Current frame:', self._export_video_frame_edit
+        )
+        
+        self._export_video_frame_label = QLabel()
+        
+        export_layout.addWidget(self._export_video_frame_label, 1)
+        export_layout.addLayout(export_details_layout, 0)
+        export_layout.addWidget(self._export_video_progress, 0)
+        export_layout.addWidget(self._export_video_cancel_button, 0)
+        self._export_widget.setLayout(export_layout)
+        
         playback_controls_layout = QHBoxLayout()
         
         placeholder_widget = QWidget()
@@ -224,6 +277,7 @@ class FrontQtVideoFrameEditor(QFrame):
         self._main_widget_stack = QStackedWidget()
         self._main_widget_stack.insertWidget(0, self._video_frame)
         self._main_widget_stack.insertWidget(1, self._calculation_widget)
+        self._main_widget_stack.insertWidget(2, self._export_widget)
         
         top_layout = QVBoxLayout()
         top_layout.addWidget(self._main_widget_stack)
@@ -232,6 +286,8 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._model_thread = FrontQtInferenceThread()
         self._model_thread.finished.connect(self._modelInferenceCompleted)
+        
+        self._export_thread = FrontQtInferenceThread()
         
         self.setModel(None, None)
         
@@ -281,6 +337,7 @@ class FrontQtVideoFrameEditor(QFrame):
             frame_gray3.shape[1], frame_gray3.shape[0],
             QImage.Format_RGB888
         )
+        self._frame_image_model_output_cv2 = frame_gray3.copy()
 
         self.setSceneMode(self.sceneMode())
         self.frame_changed.emit()
@@ -389,7 +446,83 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._main_widget_stack.setVisible(True)
         return True
+    
+    def _exportInferencedVideoCancel(self):
+        self._export_cancelled = True
+    
+    def exportInferencedVideo(self, filename, video_format):
+        # Skip if no model
+        if self._model is None:
+            return
+        # Skip on inference
+        if self._main_widget_stack.currentIndex() > 0:
+            return
         
+        # Store current frame
+        current_frame = self.currentFrame()
+        # Set cancellation flag
+        self._export_cancelled = False
+        
+        absolute_filepath = os.path.abspath(filename)
+        out_filename_mask = os.path.dirname(absolute_filepath)
+        out_filename_mask = os.path.join(
+            out_filename_mask,
+            os.path.split(absolute_filepath)[-1].split(os.path.extsep)[0]
+        )
+        out_filename_mask += '_%0' + str(
+            math.floor(math.log10(self.framesCount())) + 1
+        ) + 'u.png'
+        
+        self._export_video_edit.setText(out_filename_mask % (0))
+        
+        self._export_video_progress.setMinimum(0)
+        self._export_video_progress.setMaximum(self.framesCount())
+        self._export_video_progress.setValue(
+            self._export_video_progress.minimum()
+        )
+        
+        self._export_video_frame_edit.setText(
+            '%u / %u' % (
+                self._export_video_progress.value(),
+                self._export_video_progress.maximum()
+            )
+        )
+            
+        self._main_widget_stack.setCurrentIndex(2)
+        
+        for frame_index in range(1, self.framesCount() + 1):
+            self.switchFrame(frame_index)
+            
+            self._export_video_frame_edit.setText(
+                '%u / %u' % (
+                    frame_index,
+                    self._export_video_progress.maximum()
+                )
+            )
+            
+            self._preprocess_model_input()
+            self._export_thread.start()
+            while not (
+                self._export_cancelled or self._export_thread.isFinished()
+            ):
+                qApp.processEvents()
+            
+            if self._export_cancelled:
+                break
+            
+            self._postprocess_model_output()
+            output_frame = cv2.cvtColor(
+                self._frame_image_model_output_cv2, cv2.COLOR_BGR2RGB
+            )
+            cv2.imwrite(
+                out_filename_mask % (frame_index), output_frame
+            )
+            
+            self._export_video_progress.setValue(frame_index)
+        
+        self.switchFrame(current_frame)
+        self._main_widget_stack.setCurrentIndex(0)
+    
     def openProject(self, filename):
         with open(filename, 'r') as f:
             project_file_dict = json.loads(f.read())
@@ -771,6 +904,7 @@ class FrontQtVideoFrameEditor(QFrame):
         self._model = model
         self._model_context = context
         self._model_thread.setModel(self._model)
+        self._export_thread.setModel(self._model)
     
     def model(self):
         return self._model
@@ -831,6 +965,7 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._model.set_image(incoming_frame_gray_cv2)
         self._model_thread.setForwardArgsList([im_ab0, im_mask0])
+        self._export_thread.setForwardArgsList([im_ab0, im_mask0])
     
     def _postprocess_model_output(self):
         incoming_frame = self._frame_image_orig.rgbSwapped()
@@ -859,12 +994,16 @@ class FrontQtVideoFrameEditor(QFrame):
             out_img.shape[1], out_img.shape[0],
             QImage.Format_RGB888
         )
+        self._frame_image_model_output_cv2 = out_img.copy()
         
         # Update pixmap
         self.setSceneMode(self.sceneMode())
     
     def modelInference(self):
         if self._model is None:
+            return
+         # Skip on inference
+        if self._main_widget_stack.currentIndex() > 0:
             return
         self._main_widget_stack.setCurrentIndex(1)
         self._preprocess_model_input()
