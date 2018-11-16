@@ -9,7 +9,7 @@ import numpy as np
 
 from skimage import color as skcl
 
-from PyQt5.QtCore import pyqtSignal, Qt, QRect, QRectF, QPoint, QPointF
+from PyQt5.QtCore import pyqtSignal, Qt, QRect, QRectF, QPoint, QPointF, QSize
 from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
     QColor, QPen, QBrush, QMouseEvent, QIcon, QPainter
 from PyQt5.QtWidgets import qApp, QFrame, QGraphicsView, QGraphicsScene, \
@@ -265,6 +265,7 @@ class FrontQtVideoFrameEditor(QFrame):
         )
         
         self._export_video_frame_label = QLabel()
+        self._export_video_frame_label.setAlignment(Qt.AlignCenter)
         
         export_layout.addWidget(self._export_video_frame_label, 1)
         export_layout.addLayout(export_details_layout, 0)
@@ -522,6 +523,27 @@ class FrontQtVideoFrameEditor(QFrame):
                 qApp.processEvents()
             
             self._postprocess_model_output()
+            
+            thumbnail_size = QSize(
+                min((
+                    self._export_video_frame_label.width(),
+                    self._frame_image_model_output.width()
+                )),
+                min((
+                    self._export_video_frame_label.height(),
+                    self._frame_image_model_output.height()
+                )),
+            )
+            
+            self._export_video_frame_label.setPixmap(
+                QPixmap.fromImage(
+                    self._frame_image_model_output.scaled(
+                        thumbnail_size, Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                )
+            )
+            
             output_frame = cv2.cvtColor(
                 self._frame_image_model_output_cv2, cv2.COLOR_BGR2RGB
             )
@@ -559,6 +581,8 @@ class FrontQtVideoFrameEditor(QFrame):
     def saveProject(self, filename):
         if self._vcap is None:
             raise Exception('Unable to save project for no video loaded')
+        
+        self.switchFrame(self._current_frame)
         
         project_file_dict = {
             'video_file': self._video_filename,
