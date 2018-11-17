@@ -5,19 +5,16 @@ import math
 import os
 
 import cv2
-import numpy as np
-
-from skimage import color as skcl
 
 from PyQt5.QtCore import pyqtSignal, Qt, QRect, QRectF, QPoint, QPointF, QSize
-from PyQt5.QtGui import QPalette, QImage, QPixmap, QTransform, QPainterPath, \
-    QColor, QPen, QBrush, QMouseEvent, QIcon, QPainter
+from PyQt5.QtGui import QPalette, QPixmap, QTransform, QPainterPath, \
+    QColor, QPen, QBrush, QMouseEvent, QIcon
 from PyQt5.QtWidgets import qApp, QFrame, QGraphicsView, QGraphicsScene, \
     QGraphicsItem, QVBoxLayout, QStyle, QGraphicsPixmapItem, QLabel, \
     QStackedWidget, QSlider, QPushButton, QWidget, QHBoxLayout, QFormLayout, \
     QLineEdit, QProgressBar
 
-from .ui_thread_inference import FrontQtInferenceThread
+from .ui_local_backend import FrontQtLocalBackend, BackendFrame
 
 _COLOR_POINT_RADIUS = 3
 _COLOR_POINT_DEFAULT_COLOR = QColor.fromRgb(128, 128, 128)
@@ -69,6 +66,30 @@ class _FrontQtVideoFramePoint(QGraphicsItem):
     
     def setColor(self, new_color):
         self._color = new_color
+    
+    def toDict(self):
+        output_dict = {
+            'x': int(math.floor(self.x())),
+            'y': int(math.floor(self.y())),
+            'color': [
+                int(self.color().red()),
+                int(self.color().green()),
+                int(self.color().blue())
+            ]
+        }
+        
+        return output_dict
+
+    def fromDict(self, point_dict):
+        point_color = QColor.fromRgb(
+            point_dict['color'][0], point_dict['color'][1],
+            point_dict['color'][2]
+        )
+        point_pos = QPointF(
+            math.floor(point_dict['x']), math.floor(point_dict['y'])
+        ) + QPointF(0.5, 0.5)
+        self.setPos(point_pos)
+        self.setColor(point_color)
     
     def __init__(self):
         QGraphicsItem.__init__(self)
@@ -301,10 +322,10 @@ class FrontQtVideoFrameEditor(QFrame):
         top_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(top_layout)
         
-        self._model_thread = FrontQtInferenceThread()
-        self._model_thread.finished.connect(self._modelInferenceCompleted)
-        
-        self._export_thread = FrontQtInferenceThread()
+        self._backend = FrontQtLocalBackend(None, None)
+        self._backend.inferenceFinished.connect(
+            self._backendOperationCompleted
+        )
         
         self.setModel(None, None)
         
@@ -339,25 +360,21 @@ class FrontQtVideoFrameEditor(QFrame):
         frame_gray3 = cv2.cvtColor(
             cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2RGB
         )
-        self._frame_image_orig = QImage(
-            frame.data,
-            frame.shape[1], frame.shape[0],
-            QImage.Format_RGB888
-        ).rgbSwapped()
-        self._frame_image_gray3 = QImage(
-            frame_gray3.data,
-            frame_gray3.shape[1], frame_gray3.shape[0],
-            QImage.Format_RGB888
-        )
-        self._frame_image_model_output = QImage(
-            frame_gray3.copy().data,
-            frame_gray3.shape[1], frame_gray3.shape[0],
-            QImage.Format_RGB888
-        )
-        self._frame_image_model_output_cv2 = frame_gray3.copy()
+        self._frame_image_orig = self._backend.cv2ToFrame(frame).image()
+        self._frame_image_gray3 = self._backend.cv2ToFrame(frame_gray3).image()
+        self._frame_image_model_output = self._frame_image_gray3
 
         self.setSceneMode(self.sceneMode())
         self.frame_changed.emit()
+    
+    def _showColorPoint(self, point_item):
+        point_item.setZValue(1.0)
+        point_item.setVisible(True)
+    
+    def _hideColorPoint(self, point_item):
+        point_item.setPos(0.0, 0.0)
+        point_item.setZValue(-2.0)
+        point_item.setVisible(False)
     
     def _setCurrentPoints(self, points):
         items_list = []
@@ -375,21 +392,10 @@ class FrontQtVideoFrameEditor(QFrame):
                 items_list.append(new_item)
             
             if i < len(points):
-                item_pos = QPointF(
-                    math.floor(points[i]['x']), math.floor(points[i]['y'])
-                ) + QPointF(0.5, 0.5)
-                item_color = QColor.fromRgb(
-                    points[i]['color'][0], points[i]['color'][1],
-                    points[i]['color'][2]
-                )
-                items_list[i].setPos(item_pos)
-                items_list[i].setColor(item_color)
-                items_list[i].setZValue(1.0)
-                items_list[i].setVisible(True)
+                items_list[i].fromDict(points[i])
+                self._showColorPoint(items_list[i])
             else:
-                items_list[i].setPos(0.0, 0.0)
-                items_list[i].setZValue(-2.0)
-                items_list[i].setVisible(False)
+                self._hideColorPoint(items_list[i])
     
     def _getCurrentPoints(self):
         points_list = []
@@ -398,18 +404,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 continue
             if not item.isVisible():
                 continue
-            
-            point = {
-                'x': math.floor(item.x()),
-                'y': math.floor(item.y()),
-                'color': [
-                    item.color().red(),
-                    item.color().green(),
-                    item.color().blue()
-                ]
-            }
-            
-            points_list.append(point)
+            points_list.append(item.toDict())
         
         return points_list
     
@@ -504,7 +499,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 self._export_video_progress.maximum()
             )
         )
-            
+        
         self._main_widget_stack.setCurrentIndex(2)
         
         for frame_index in range(1, self.framesCount() + 1):
@@ -517,12 +512,13 @@ class FrontQtVideoFrameEditor(QFrame):
                 )
             )
             
-            self._preprocess_model_input()
-            self._export_thread.start()
-            while not self._export_thread.isFinished():
+            self._backend.colorizeByPoints(
+                BackendFrame(self._frame_image_orig, self._getCurrentPoints())
+            )
+            while not self._backend.isCompleted():
                 qApp.processEvents()
-            
-            self._postprocess_model_output()
+            self._frame_image_model_output = \
+                self._backend.outputFrame().image()
             
             thumbnail_size = QSize(
                 min((
@@ -544,11 +540,8 @@ class FrontQtVideoFrameEditor(QFrame):
                 )
             )
             
-            output_frame = cv2.cvtColor(
-                self._frame_image_model_output_cv2, cv2.COLOR_BGR2RGB
-            )
-            cv2.imwrite(
-                out_filename_mask % (frame_index), output_frame
+            self._frame_image_model_output.save(
+                out_filename_mask % (frame_index)
             )
             
             self._export_video_progress.setValue(frame_index)
@@ -648,7 +641,7 @@ class FrontQtVideoFrameEditor(QFrame):
             color_points.append(color_point_dict)
         
         self._setCurrentPoints(color_points)
-            
+    
     def _mapCursorToSceneCoordinates(self, point):
         return self._scene_widget.mapToScene(point)
     
@@ -766,9 +759,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 
                 if new_point is None:
                     new_point = _FrontQtVideoFramePoint()
-                    new_point.setPos(0, 0)
-                    new_point.setZValue(-2.0)
-                    new_point.setVisible(False)
+                    self._hideColorPoint(new_point)
                     self._scene.addItem(new_point)
                 
                 # Position at the center of frame pixel
@@ -786,8 +777,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 scene_coodinates, self._scene_widget.transform()
             )
             if isinstance(item, _FrontQtVideoFramePoint):
-                item.setZValue(-2.0)
-                item.setVisible(False)
+                self._hideColorPoint(item)
     
     def currentFilename(self):
         return self._video_filename
@@ -811,11 +801,9 @@ class FrontQtVideoFrameEditor(QFrame):
         if self._vcap is None:
             return
         
-        selected_points = self._scene.selectedItems()
-        for point in selected_points:
-            point.setPos(0.0, 0.0)
-            point.setZValue(-2.0)
-            point.setVisible(False)
+        selected_items = self._scene.selectedItems()
+        for item in selected_items:
+            self._hideColorPoint(item)
         
         self._scene.clearSelection()
         self._scene.update()
@@ -824,22 +812,13 @@ class FrontQtVideoFrameEditor(QFrame):
         if self._vcap is None:
             return
         
-        selected_points = self._scene.selectedItems()
-        if len(selected_points) == 0:
+        selected_items = self._scene.selectedItems()
+        if len(selected_items) == 0:
             return
         
         self._points_clipboard = []
-        for point in selected_points:
-            point_dict = {
-                'x': math.floor(point.x()),
-                'y': math.floor(point.y()),
-                'color': [
-                    point.color().red(),
-                    point.color().green(),
-                    point.color().blue()
-                ]
-            }
-            self._points_clipboard.append(point_dict)
+        for item in selected_items:
+            self._points_clipboard.append(item.toDict())
         
         self._scene.clearSelection()
     
@@ -925,63 +904,24 @@ class FrontQtVideoFrameEditor(QFrame):
         new_frame_index = self._current_frame + 1
         self.switchFrame(new_frame_index)
         
-        # Extract points of the prevous frame
-        cpoints = self._points_cache[new_frame_index - 1]
-        # Don't extrapolate if there are no points
-        if len(cpoints) == 0:
-            self.modelInference()
-            return
-        
-        lk_params = dict(
-            winSize = (15, 15), maxLevel = 2,
-            criteria = (
-                cv2.TermCriteria_EPS | cv2.TermCriteria_COUNT, 10, 0.03
-            )
+        old_frame = self._backend.cv2ToFrame(
+            self._frames_cache[new_frame_index - 1],
+            self._points_cache[new_frame_index - 1]
         )
         
-        old_points = np.array([[[p['x'], p['y']]] for p in cpoints]).astype(
-            np.float32
-        )
-        old_gray = cv2.cvtColor(
-            self._frames_cache[new_frame_index - 1], cv2.COLOR_BGR2GRAY
-        )
-        new_gray = cv2.cvtColor(
-            self._frames_cache[new_frame_index], cv2.COLOR_BGR2GRAY
+        new_frame = self._backend.cv2ToFrame(
+            self._frames_cache[new_frame_index],
+            []
         )
         
-        new_points, st_new, err = cv2.calcOpticalFlowPyrLK(
-            old_gray, new_gray, old_points, None, **lk_params
-        )
-        new_points = new_points[:, 0, :]
-        
-        ERROR_THRESHOLD = 1e5
-        image_size = np.array(new_gray.shape[::-1], dtype = np.int)
-        
-        # Mark points excluded by algo
-        valid_points = (st_new.flatten() > 0)
-        # Mark points excluded by error threshold
-        valid_points &= (err.flatten() < ERROR_THRESHOLD)
-        
-        # Round and neighbour-adjust new pixels
-        new_pixels = new_points.round().astype(np.int)
-        new_pixels[new_pixels >= image_size] -= 1
-        new_pixels[new_pixels < 0] += 1
-        
-        # Mark pixels out of frame rect
-        valid_points &= (new_pixels >= 0).all(axis = 1).flatten()
-        valid_points &= (new_pixels < image_size).all(axis = 1).flatten()
-        
-        new_points = [
-            {
-                'x': new_pixels[i, 0], 'y': new_pixels[i, 1],
-                'color': cpoints[i]['color']
-            } for i in range(len(cpoints)) if valid_points[i]
-        ]
-        
+        self._backend.extrapolateColorPoints(old_frame, new_frame)
+        extrapolated_frame = self._backend.outputFrame()
         # Set calculated points ans new ones for the frame
-        self._setCachedPoints(new_points, new_frame_index)
+        self._setCachedPoints(
+            extrapolated_frame.color_points(), new_frame_index
+        )
         # Update on sceeen
-        self._setCurrentPoints(new_points)
+        self._setCurrentPoints(extrapolated_frame.color_points())
         self.modelInference()
     
     def currentFrame(self):
@@ -993,8 +933,7 @@ class FrontQtVideoFrameEditor(QFrame):
     def setModel(self, model, context):
         self._model = model
         self._model_context = context
-        self._model_thread.setModel(self._model)
-        self._export_thread.setModel(self._model)
+        self._backend.setModel(model, context)
     
     def model(self):
         return self._model
@@ -1002,105 +941,25 @@ class FrontQtVideoFrameEditor(QFrame):
     def modelContext(self):
         return self._model_context
     
-    def _preprocess_model_input(self):
-        w = int(max((
-            self._frame_image_orig.width(), self._frame_image_orig.height()
-        )) / self._model_context['load_size'])
-        
-        ptr = self._frame_image_gray3.constBits()
-        ptr.setsize(self._frame_image_gray3.byteCount())
-        
-        frame_gray_cv2 = np.array(ptr, dtype = np.uint8).reshape((
-            self._frame_image_gray3.height(), self._frame_image_gray3.width(),
-            3
-        ))
-        
-        incoming_frame_gray_cv2 = cv2.resize(
-            frame_gray_cv2, (
-                self._model_context['load_size'],
-                self._model_context['load_size']
-            ),
-            interpolation = cv2.INTER_CUBIC
-        )
-        
-        im = np.zeros(incoming_frame_gray_cv2.shape, dtype = np.uint8)
-        mask = np.zeros(
-            tuple(list(incoming_frame_gray_cv2.shape[:-1]) + [1]),
-            dtype = np.uint8
-        )
-        
-        color_points = self._getCurrentPoints()
-        for color_point in color_points:
-            point = (
-                np.array([color_point['x'], color_point['y']]) *
-                self._model_context['load_size'] /
-                np.array(frame_gray_cv2.shape[1::-1])
-            ).astype(np.uint)
-            
-            tl = tuple((point - w).tolist())
-            br = tuple((point + w).tolist())
-            
-            cv2.rectangle(mask, tl, br, 255, -1)
-            cv2.rectangle(
-                im, tl, br,
-                [
-                    color_point['color'][0], color_point['color'][1],
-                    color_point['color'][2]
-                ],
-                -1
-            )
-            
-        im_mask0 = (mask > 0.0).transpose((2, 0, 1))
-        im_ab0 = skcl.rgb2lab(im).transpose((2, 0, 1))[1:3, :, :]
-        
-        self._model.set_image(incoming_frame_gray_cv2)
-        self._model_thread.setForwardArgsList([im_ab0, im_mask0])
-        self._export_thread.setForwardArgsList([im_ab0, im_mask0])
-    
-    def _postprocess_model_output(self):
-        incoming_frame = self._frame_image_orig.rgbSwapped()
-        
-        ptr = incoming_frame.constBits()
-        ptr.setsize(incoming_frame.byteCount())
-        
-        incoming_frame_cv2 = np.array(ptr, dtype = np.uint8).reshape(
-            (incoming_frame.height(), incoming_frame.width(), 3)
-        )
-        
-        incoming_frame_l = skcl.rgb2lab(incoming_frame_cv2)[:, :, 0]
-        
-        out_ab = self._model.output_ab.transpose((1, 2, 0))
-        out_ab = cv2.resize(
-            out_ab, incoming_frame_l.shape[::-1],
-            interpolation = cv2.INTER_CUBIC
-        )
-        out_lab = np.concatenate(
-            (incoming_frame_l[..., np.newaxis], out_ab), axis = 2
-        )
-        out_img = (np.clip(skcl.lab2rgb(out_lab), 0, 1) * 255).astype(np.uint8)
-        
-        self._frame_image_model_output = QImage(
-            out_img.data,
-            out_img.shape[1], out_img.shape[0],
-            QImage.Format_RGB888
-        )
-        self._frame_image_model_output_cv2 = out_img.copy()
-        
-        # Update pixmap
-        self.setSceneMode(self.sceneMode())
-    
     def modelInference(self):
         if self._model is None:
             return
-         # Skip on inference
-        if self._main_widget_stack.currentIndex() > 0:
+        # Skip on inference
+        if self._main_widget_stack.currentIndex() != 0:
             return
         self._main_widget_stack.setCurrentIndex(1)
-        self._preprocess_model_input()
-        self._model_thread.start()
+        self._backend.colorizeByPoints(
+            BackendFrame(self._frame_image_orig, self._getCurrentPoints())
+        )
     
-    def _modelInferenceCompleted(self):
+    def _backendOperationCompleted(self):
         if self._model is None:
             return
-        self._postprocess_model_output()
+        # Skip on export
+        if self._main_widget_stack.currentIndex() != 1:
+            return
+        
+        self._frame_image_model_output = self._backend.outputFrame().image()
+        # Update pixmap
+        self.setSceneMode(self.sceneMode())
         self._main_widget_stack.setCurrentIndex(0)
