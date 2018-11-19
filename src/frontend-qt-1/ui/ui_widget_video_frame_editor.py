@@ -153,7 +153,7 @@ class FrontQtVideoFrameEditor(QFrame):
     STATE_COLORIZATION = 1
     STATE_VIDEO_EXPORT = 2
     
-    VIDEO_FORMAT_PNG_SEQUENCE = 0,
+    VIDEO_FORMAT_PNG_SEQUENCE = 0
     VIDEO_FORMAT_X264 = 1
     
     def reset(self):
@@ -500,11 +500,29 @@ class FrontQtVideoFrameEditor(QFrame):
             out_filename_mask,
             os.path.split(absolute_filepath)[-1].split(os.path.extsep)[0]
         )
-        out_filename_mask += '_%0' + str(
-            math.floor(math.log10(self.framesCount())) + 1
-        ) + 'u.png'
+        if video_format == self.VIDEO_FORMAT_PNG_SEQUENCE:
+            out_filename_mask += '_%0' + str(
+                math.floor(math.log10(self.framesCount())) + 1
+            ) + 'u.png'
+            export_writer = None
+        else:
+            out_filename_mask += '.mp4'
+            frame_size = (
+                self._frame_image_orig.width(), self._frame_image_orig.height()
+            )
+            fourcc = cv2.VideoWriter_fourcc(*'X264')
+            export_writer = cv2.VideoWriter(
+                out_filename_mask, fourcc,
+                self._vcap.get(cv2.CAP_PROP_FPS),
+                frame_size
+            )
+            if not export_writer.isOpened():
+                return False
         
-        self._export_video_edit.setText(out_filename_mask % (0))
+        self._export_video_edit.setText(
+            out_filename_mask % (0) if export_writer is None
+            else out_filename_mask
+        )
         
         self._export_video_progress.setMinimum(0)
         self._export_video_progress.setMaximum(self.framesCount())
@@ -559,16 +577,26 @@ class FrontQtVideoFrameEditor(QFrame):
                 )
             )
             
-            self._frame_image_model_output.save(
-                out_filename_mask % (frame_index)
-            )
+            if export_writer is not None:
+                frame_image_model_output_cv2, _ = self._backend.frameToCv2(
+                    self._backend.outputFrame()
+                )
+                export_writer.write(frame_image_model_output_cv2)
+            else:
+                self._frame_image_model_output.save(
+                    out_filename_mask % (frame_index)
+                )
             
             self._export_video_progress.setValue(frame_index)
             if self._export_cancelled:
                 break
         
+        if export_writer is not None:
+            export_writer.release()
+        
         self.switchFrame(current_frame)
         self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        return True
     
     def openProject(self, filename):
         with open(filename, 'r') as f:

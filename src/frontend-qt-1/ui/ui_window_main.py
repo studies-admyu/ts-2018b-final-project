@@ -361,14 +361,32 @@ class FrontQtWindowMain(QMainWindow):
     def _exportInferencedVideo(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
             return
+        
+        output_formats = [
+            self._wgtFrameEditor.VIDEO_FORMAT_PNG_SEQUENCE,
+            self._wgtFrameEditor.VIDEO_FORMAT_X264
+        ]
+        extension_dict = {
+            'Sequenced png files (*.png)': output_formats[0],
+            'MPEG4 video files (*.mp4)': output_formats[1]
+        }
+        
         output_video_filename = QFileDialog.getSaveFileName(
-            self, 'Export video'
+            self, 'Export video',
+            filter = ';;'.join(extension_dict.keys())
         )
         if len(output_video_filename[0]) == 0:
             return
-        self._wgtFrameEditor.exportInferencedVideo(
-            output_video_filename[0], 0
-        )
+        if not self._wgtFrameEditor.exportInferencedVideo(
+            output_video_filename[0], extension_dict[output_video_filename[1]]
+        ):
+            QMessageBox.critical(
+                self, 'Export video',
+                ('Unable to export video to file ' +
+                '<i>%s</i>. Please check you installed codecs.') % (
+                    output_video_filename[0]
+                )
+            )
     
     def _exportColorPoints(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
