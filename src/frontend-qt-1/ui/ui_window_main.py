@@ -311,7 +311,7 @@ class FrontQtWindowMain(QMainWindow):
                 (self._dlgNewProject.getVideoFilename())
             )
         
-        self._updateUI()
+        self.reset()
     
     def _frameMouseMove(self, x, y):
         self._lblImagePos.setText('X: %4d Y: %4d' % (x, y))
@@ -344,8 +344,17 @@ class FrontQtWindowMain(QMainWindow):
         )
         if len(project_filename[0]) == 0:
             return
-        self._wgtFrameEditor.openProject(project_filename[0])
-        self._updateUI()
+        
+        try:
+            self._wgtFrameEditor.openProject(project_filename[0])
+        except Exception:
+            self._wgtFrameEditor.reset()
+            QMessageBox.critical(
+                self, 'Open project error', 'Unable to open project file ' +
+                ('<i>%s</i>' % (project_filename[0])) +
+                ' due to wrong file format or access restrictions.'
+            )
+        self.reset()
     
     def _saveProjectAs(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
@@ -355,7 +364,15 @@ class FrontQtWindowMain(QMainWindow):
         )
         if len(project_filename[0]) == 0:
             return
-        self._wgtFrameEditor.saveProject(project_filename[0])
+        try:
+            self._wgtFrameEditor.saveProject(project_filename[0])
+        except Exception:
+            QMessageBox.critical(
+                self, 'Save project error', 'Unable to save current project ' +
+                'to file ' +
+                ('<i>%s</i>' % (project_filename[0])) +
+                ' due to access restrictions.'
+            )
         self._updateUI()
     
     def _exportInferencedVideo(self):
@@ -383,7 +400,8 @@ class FrontQtWindowMain(QMainWindow):
             QMessageBox.critical(
                 self, 'Export video',
                 ('Unable to export video to file ' +
-                '<i>%s</i>. Please check you installed codecs.') % (
+                '<i>%s</i>. Please check your installed codecs, ' +
+                'access restrictions or free storage amount.') % (
                     output_video_filename[0]
                 )
             )
@@ -391,22 +409,39 @@ class FrontQtWindowMain(QMainWindow):
     def _exportColorPoints(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
             return
-        project_filename = QFileDialog.getSaveFileName(
+        export_filename = QFileDialog.getSaveFileName(
             self, 'Export color points file'
         )
-        if len(project_filename[0]) == 0:
+        if len(export_filename[0]) == 0:
             return
-        self._wgtFrameEditor.exportColorPoints(project_filename[0])
+        try:
+            self._wgtFrameEditor.exportColorPoints(export_filename[0])
+        except Exception:
+            QMessageBox.critical(
+                self, 'Export color points error',
+                'Unable to export color points to file ' +
+                ('<i>%s</i>' % (export_filename[0])) +
+                ' due to access restrictions.'
+            )
     
     def _importColorPoints(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
             return
-        project_filename = QFileDialog.getOpenFileName(
+        import_filename = QFileDialog.getOpenFileName(
             self, 'Import color points file'
         )
-        if len(project_filename[0]) == 0:
+        if len(import_filename[0]) == 0:
             return
-        self._wgtFrameEditor.importColorPoints(project_filename[0])
+        try:
+            self._wgtFrameEditor.importColorPoints(import_filename[0])
+        except Exception:
+            QMessageBox.critical(
+                self, 'Import color points error',
+                'Unable to import color points from file ' +
+                ('<i>%s</i>' % (import_filename[0])) +
+                ' due to wrong file format or access restrictions.'
+            )
+        self._updateUI()
     
     def __init__(self, model = None, model_context = None):
         QMainWindow.__init__(self)
