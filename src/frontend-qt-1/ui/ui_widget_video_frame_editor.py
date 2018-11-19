@@ -204,7 +204,6 @@ class FrontQtVideoFrameEditor(QFrame):
         self._scene_widget.setAutoFillBackground(True)
         self._scene_widget.setBackgroundRole(QPalette.Dark)
         self._scene_widget.setMouseTracking(True)
-        self._scene_widget.setInteractive(True)
         
         self._scene_widget.mouse_moved.connect(self._frameViewMouseMoveEvent)
         self._scene_widget.mouse_pressed.connect(
@@ -849,12 +848,17 @@ class FrontQtVideoFrameEditor(QFrame):
         
         if self._editMode == self.EDIT_MODE_HAND:
             self._scene_widget.setDragMode(QGraphicsView.ScrollHandDrag)
-            self._scene_widget.setCursor(Qt.ArrowCursor)
+            self._scene_widget.setInteractive(False)
+            self._scene.clearSelection()
         elif self._editMode == self.EDIT_MODE_EDIT_POINT:
             self._scene_widget.setDragMode(QGraphicsView.RubberBandDrag)
+            self._scene_widget.setInteractive(True)
+            self._scene_widget.setCursor(Qt.CrossCursor)
         else:
             self._scene_widget.setDragMode(QGraphicsView.NoDrag)
+            self._scene_widget.setInteractive(False)
             self._scene_widget.setCursor(Qt.CrossCursor)
+            self._scene.clearSelection()
     
     def editMode(self):
         return self._editMode
