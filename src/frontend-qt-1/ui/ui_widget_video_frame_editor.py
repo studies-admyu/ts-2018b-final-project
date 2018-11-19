@@ -538,6 +538,7 @@ class FrontQtVideoFrameEditor(QFrame):
         )
         
         self._main_widget_stack.setCurrentIndex(self.STATE_VIDEO_EXPORT)
+        frame_saved = True
         
         for frame_index in range(1, self.framesCount() + 1):
             self.switchFrame(frame_index)
@@ -581,11 +582,17 @@ class FrontQtVideoFrameEditor(QFrame):
                 frame_image_model_output_cv2, _ = self._backend.frameToCv2(
                     self._backend.outputFrame()
                 )
-                export_writer.write(frame_image_model_output_cv2)
+                try:
+                    export_writer.write(frame_image_model_output_cv2)
+                except Exception:
+                    frame_saved = False
+                    break
             else:
-                self._frame_image_model_output.save(
+                if not self._frame_image_model_output.save(
                     out_filename_mask % (frame_index)
-                )
+                ):
+                    frame_saved = False
+                    break
             
             self._export_video_progress.setValue(frame_index)
             if self._export_cancelled:
@@ -596,13 +603,14 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self.switchFrame(current_frame)
         self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
-        return True
+        return frame_saved
     
     def openProject(self, filename):
         with open(filename, 'r') as f:
             project_file_dict = json.loads(f.read())
         
-        self.openVideoFile(project_file_dict['video_file'])
+        if not self.openVideoFile(project_file_dict['video_file']):
+            raise Exception('Unable to open project video')
         
         for frame_index in project_file_dict['color_points']:
             frame_points = [
@@ -687,6 +695,7 @@ class FrontQtVideoFrameEditor(QFrame):
             
             color_points.append(color_point_dict)
         
+        self._scene.clearSelection()
         self._setCurrentPoints(color_points)
     
     def _mapCursorToSceneCoordinates(self, point):
