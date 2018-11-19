@@ -136,6 +136,8 @@ class FrontQtVideoFrameEditor(QFrame):
     frame_mouse_move = pyqtSignal(int, int)
     frame_mouse_leave = pyqtSignal()
     frame_changed = pyqtSignal()
+    points_selection_changed = pyqtSignal()
+    state_changed = pyqtSignal(int)
     
     EDIT_MODE_HAND = 0
     EDIT_MODE_EYEDROPPER = 1
@@ -146,6 +148,10 @@ class FrontQtVideoFrameEditor(QFrame):
     SCENE_MODE_ORIGINAL = 0
     SCENE_MODE_GRAYSCALE = 1
     SCENE_MODE_COLORIZED = 2
+    
+    STATE_FRAME_EDIT = 0
+    STATE_COLORIZATION = 1
+    STATE_VIDEO_EXPORT = 2
     
     VIDEO_FORMAT_PNG_SEQUENCE = 0,
     VIDEO_FORMAT_X264 = 1
@@ -175,7 +181,9 @@ class FrontQtVideoFrameEditor(QFrame):
         self._frame_slider.valueChanged.connect(self.switchFrame)
         
         self._main_widget_stack.setVisible(False)
-        self._main_widget_stack.setCurrentIndex(0)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        
+        self._scene.clearSelection()
         
         self.setEditMode(self.EDIT_MODE_HAND)
         self.setSceneMode(self.SCENE_MODE_ORIGINAL)
@@ -236,6 +244,7 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._scene = QGraphicsScene()
         self._scene_widget.setScene(self._scene)
+        self._scene.selectionChanged.connect(self._sceneSelectionChanged)
         
         self._calculation_widget = QLabel()
         self._calculation_widget.setAutoFillBackground(True)
@@ -313,9 +322,18 @@ class FrontQtVideoFrameEditor(QFrame):
         self._video_frame.setLayout(video_layout)
         
         self._main_widget_stack = QStackedWidget()
-        self._main_widget_stack.insertWidget(0, self._video_frame)
-        self._main_widget_stack.insertWidget(1, self._calculation_widget)
-        self._main_widget_stack.insertWidget(2, self._export_widget)
+        self._main_widget_stack.insertWidget(
+            self.STATE_FRAME_EDIT, self._video_frame
+        )
+        self._main_widget_stack.insertWidget(
+            self.STATE_COLORIZATION, self._calculation_widget
+        )
+        self._main_widget_stack.insertWidget(
+            self.STATE_VIDEO_EXPORT, self._export_widget
+        )
+        self._main_widget_stack.currentChanged.connect(
+            self._stackCurrentChanged
+        )
         
         top_layout = QVBoxLayout()
         top_layout.addWidget(self._main_widget_stack)
@@ -430,6 +448,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 (self.framesCount())
             )
         
+        self._scene.clearSelection()
         if frame_index not in self._points_cache:
             self._setCachedPoints([], frame_index)
         
@@ -500,7 +519,7 @@ class FrontQtVideoFrameEditor(QFrame):
             )
         )
         
-        self._main_widget_stack.setCurrentIndex(2)
+        self._main_widget_stack.setCurrentIndex(self.STATE_VIDEO_EXPORT)
         
         for frame_index in range(1, self.framesCount() + 1):
             self.switchFrame(frame_index)
@@ -549,7 +568,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 break
         
         self.switchFrame(current_frame)
-        self._main_widget_stack.setCurrentIndex(0)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
     
     def openProject(self, filename):
         with open(filename, 'r') as f:
@@ -782,6 +801,12 @@ class FrontQtVideoFrameEditor(QFrame):
     def currentFilename(self):
         return self._video_filename
     
+    def state(self):
+        return self._main_widget_stack.currentIndex()
+    
+    def _stackCurrentChanged(self, state):
+        self.state_changed.emit(state)
+    
     def setEditMode(self, mode):
         self._editMode = mode
         
@@ -930,6 +955,15 @@ class FrontQtVideoFrameEditor(QFrame):
     def framesCount(self):
         return self._frame_slider.maximum()
     
+    def selectedPoints(self):
+        return [
+            p for p in self._scene.selectedItems()
+            if isinstance(p, _FrontQtVideoFramePoint)
+        ]
+    
+    def _sceneSelectionChanged(self):
+        self.points_selection_changed.emit()
+    
     def setModel(self, model, context):
         self._model = model
         self._model_context = context
@@ -947,7 +981,8 @@ class FrontQtVideoFrameEditor(QFrame):
         # Skip on inference
         if self._main_widget_stack.currentIndex() != 0:
             return
-        self._main_widget_stack.setCurrentIndex(1)
+        self._scene.clearSelection()
+        self._main_widget_stack.setCurrentIndex(self.STATE_COLORIZATION)
         self._backend.colorizeByPoints(
             BackendFrame(self._frame_image_orig, self._getCurrentPoints())
         )
@@ -962,4 +997,4 @@ class FrontQtVideoFrameEditor(QFrame):
         self._frame_image_model_output = self._backend.outputFrame().image()
         # Update pixmap
         self.setSceneMode(self.sceneMode())
-        self._main_widget_stack.setCurrentIndex(0)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)

@@ -104,6 +104,10 @@ class FrontQtWindowMain(QMainWindow):
         self._wgtFrameEditor.frame_changed.connect(
             self._videoFrameChanged
         )
+        self._wgtFrameEditor.points_selection_changed.connect(
+            self._updateUI
+        )
+        self._wgtFrameEditor.state_changed.connect(self._updateUI)
         
         self.setCentralWidget(self._wgtFrameEditor)
     
@@ -246,9 +250,37 @@ class FrontQtWindowMain(QMainWindow):
         self._updatePickedColorButton()
         self._changeEditMode(self._toolKeyList[0])
         self._changeSceneMode(self._sceneModesList[0])
+        
+        self._updateUI()
     
     def about(self):
         QMessageBox.information(self, 'About', '<b>Qt Frontend</b>')
+    
+    def _updateUI(self):
+        project_opened = (len(self._wgtFrameEditor.currentFilename()) > 0)
+        points_selected = (len(self._wgtFrameEditor.selectedPoints()) > 0)
+        edit_state = (
+            self._wgtFrameEditor.state() ==
+            self._wgtFrameEditor.STATE_FRAME_EDIT
+        )
+        
+        self._actNew.setEnabled(edit_state)
+        self._actOpen.setEnabled(edit_state)
+        self._actQuit.setEnabled(edit_state)
+        
+        self._actSaveAs.setEnabled(project_opened and edit_state)
+        self._actExportVideo.setEnabled(project_opened and edit_state)
+        self._actExportFramePoints.setEnabled(project_opened and edit_state)
+        self._actImportFramePoints.setEnabled(project_opened and edit_state)
+        
+        self._actCopySelected.setEnabled(
+            project_opened and points_selected and edit_state)
+        self._actDeleteSelected.setEnabled(
+            project_opened and points_selected and edit_state
+        )
+        self._actPaste.setEnabled(project_opened and edit_state)
+        
+        self._tbtnInferenceModel.setEnabled(project_opened and edit_state)
     
     def _updatePickedColorButton(self):
         palette = self._btnCurrentColor.palette()
@@ -278,6 +310,8 @@ class FrontQtWindowMain(QMainWindow):
                 self, 'New project', 'Unable to open video <b>%s</b>.' %
                 (self._dlgNewProject.getVideoFilename())
             )
+        
+        self._updateUI()
     
     def _frameMouseMove(self, x, y):
         self._lblImagePos.setText('X: %4d Y: %4d' % (x, y))
@@ -311,6 +345,7 @@ class FrontQtWindowMain(QMainWindow):
         if len(project_filename[0]) == 0:
             return
         self._wgtFrameEditor.openProject(project_filename[0])
+        self._updateUI()
     
     def _saveProjectAs(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
@@ -321,6 +356,7 @@ class FrontQtWindowMain(QMainWindow):
         if len(project_filename[0]) == 0:
             return
         self._wgtFrameEditor.saveProject(project_filename[0])
+        self._updateUI()
     
     def _exportInferencedVideo(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
