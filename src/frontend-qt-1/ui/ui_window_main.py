@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from PyQt5.QtCore import Qt, QSignalMapper
-from PyQt5.QtGui import QColor, QIcon
+from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QAction, QMenu, QMessageBox, qApp, \
     QLabel, QDockWidget, QToolButton, QPushButton, QGridLayout, QFrame, \
     QColorDialog, QFileDialog
@@ -283,12 +283,12 @@ class FrontQtWindowMain(QMainWindow):
         self._tbtnInferenceModel.setEnabled(project_opened and edit_state)
     
     def _updatePickedColorButton(self):
-        palette = self._btnCurrentColor.palette()
-        palette.setColor(
-            self._btnCurrentColor.backgroundRole(),
-            self._wgtFrameEditor.currentColor()
-        )
-        self._btnCurrentColor.setPalette(palette)
+        max_dimension = max((
+            self._btnCurrentColor.width(), self._btnCurrentColor.height()
+        ))
+        back_pixmap = QPixmap(max_dimension, max_dimension)
+        back_pixmap.fill(self._wgtFrameEditor.currentColor())
+        self._btnCurrentColor.setIcon(QIcon(back_pixmap))
     
     def _setPickedColor(self, new_color):
         self._wgtFrameEditor.setCurrentColor(new_color)
