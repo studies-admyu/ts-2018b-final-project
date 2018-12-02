@@ -470,7 +470,6 @@ class FrontQtWindowMain(QMainWindow):
         self._initModel(model, model_context)
         
         self.setWindowTitle('Qt Frontend')
-        self.setWindowState(Qt.WindowMaximized)
         self.setWindowIcon(
             QIcon('images/icons/32x32_color/convert_gray_to_color.png')
         )
