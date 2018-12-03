@@ -5,10 +5,10 @@ import torch.nn as nn
 
 
 class SIGGRAPHGenerator(nn.Module):
-    def __init__(self, cuda = True, dist=False):
+    def __init__(self, use_cuda = True, dist=False):
         super(SIGGRAPHGenerator, self).__init__()
         self.dist = dist
-        self.cuda = cuda
+        self._use_cuda = use_cuda
         use_bias = True
         norm_layer = nn.BatchNorm2d
 
@@ -139,7 +139,7 @@ class SIGGRAPHGenerator(nn.Module):
         # input_B \in [-110, +110]
         # mask_B \in [0, +0.5]
 
-        if self.cuda:
+        if self._use_cuda:
             input_A = torch.Tensor(input_A).cuda()[None, :, :, :]
             input_B = torch.Tensor(input_B).cuda()[None, :, :, :]
             mask_B = torch.Tensor(mask_B).cuda()[None, :, :, :]

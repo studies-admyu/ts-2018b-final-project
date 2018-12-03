@@ -10,7 +10,7 @@ from data import colorize_image as CI
 from ui.ui_window_main import FrontQtWindowMain
 
 MODEL_CONTEXT = {
-    'gpu_id': -1,
+    'gpu_id': None,
     'load_size': 256,
     'pretrained_model': (
         'pretrained_models/checkpoints/siggraph_pretrained/' +
