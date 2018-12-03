@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import os
@@ -39,5 +38,5 @@ if __name__ == '__main__':
     # Init QApplication then
     app = QApplication(sys.argv)
     window = FrontQtWindowMain(colorization_model, MODEL_CONTEXT)
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec_())

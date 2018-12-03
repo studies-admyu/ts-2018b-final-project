@@ -535,6 +535,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 self._export_video_progress.maximum()
             )
         )
+        self._export_video_frame_label.clear()
         
         self._main_widget_stack.setCurrentIndex(self.STATE_VIDEO_EXPORT)
         frame_saved = True
@@ -602,6 +603,7 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self.switchFrame(current_frame)
         self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        
         return frame_saved
     
     def openProject(self, filename):
