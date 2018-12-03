@@ -213,12 +213,47 @@ class ColorizeImageTorch(ColorizeImageBase):
 
     # ***** Net preparation *****
     def prep_net(self, gpu_id=None, path='', dist=False):
+        MIN_MEMORY_THRESHOLD = 2 * (1024 ** 3)
+        
         import torch
         import models.pytorch.model as model
         print('path = %s' % path)
         print('Model set! dist mode? ', dist)
-        use_cuda = (gpu_id > -1) if gpu_id is not None else False
-        self.net = model.SIGGRAPHGenerator(cuda = use_cuda, dist=dist)
+        
+        use_cuda = False
+        if (0 if gpu_id is None else gpu_id) > -1:
+            print('Checking for CUDA...')
+            # get list of gpus to probe
+            pgpus_list = (
+                [gpu_id] if gpu_id is not None
+                else [i for i in range(torch.cuda.device_count())]
+            )
+            for pgpu_id in pgpus_list:
+                pgpu_props = torch.cuda.get_device_properties(pgpu_id)
+                print(
+                    'Checking CUDA[%d]: %s, mem: %d...' % (
+                        pgpu_id, pgpu_props.name, pgpu_props.total_memory
+                    )
+                )
+                if pgpu_props.total_memory < MIN_MEMORY_THRESHOLD:
+                    print(
+                        'CUDA[%d] has insufficient memory size, skipping' % (
+                            pgpu_id
+                        )
+                    )
+                else:
+                    # select the device
+                    use_cuda = True
+                    break
+            
+            if not use_cuda:
+                print('No compatible CUDA devices found')
+        
+        print(
+            'Using ' + ('CUDA' if use_cuda else 'CPU') +
+            ' for inference'
+        )
+        self.net = model.SIGGRAPHGenerator(use_cuda = use_cuda, dist=dist)
         state_dict = torch.load(path)
         if hasattr(state_dict, '_metadata'):
             del state_dict._metadata
