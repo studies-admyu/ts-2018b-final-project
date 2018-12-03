@@ -2,11 +2,10 @@
 
 ## Colorization
 
-Use VideoProcessingColorization.ipynb as a sample. To use it you need to download the pretrained model::
-
-    cd pretrained_models
+To use the frontend you need to link it with models and download the pretrained one::
+    ln -s <full-path-to-repository>/src/common-1 common
+    cd common/pretrained_models
     sh download_siggraph_model.sh
-    cd ..
 
 ## Frontend
 
@@ -42,4 +41,4 @@ Calculate colorization - use to colorize the grayscale verion of image according
 
 ### Playback
 
-Tools for navigation through the opened video (not implemented).
+Tools for navigation through the opened video.

@@ -216,7 +216,7 @@ class ColorizeImageTorch(ColorizeImageBase):
         MIN_MEMORY_THRESHOLD = 2 * (1024 ** 3)
         
         import torch
-        import models.pytorch.model as model
+        import common.models.pytorch.model as model
         print('path = %s' % path)
         print('Model set! dist mode? ', dist)
         

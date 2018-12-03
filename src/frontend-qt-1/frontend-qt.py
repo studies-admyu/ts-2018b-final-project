@@ -5,7 +5,7 @@ import sys
 
 from PyQt5.QtWidgets import QApplication
 
-from data import colorize_image as CI
+from common.data import colorize_image as CI
 
 from ui.ui_window_main import FrontQtWindowMain
 
@@ -13,7 +13,7 @@ MODEL_CONTEXT = {
     'gpu_id': None,
     'load_size': 256,
     'pretrained_model': (
-        'pretrained_models/checkpoints/siggraph_pretrained/' +
+        'common/pretrained_models/checkpoints/siggraph_pretrained/' +
         'latest_net_G.pth'
     )
 }
