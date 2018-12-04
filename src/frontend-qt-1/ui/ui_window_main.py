@@ -76,6 +76,7 @@ class FrontQtWindowMain(QMainWindow):
     def _createMenu(self):
         self._mnuFile = QMenu('&File')
         self._mnuFile.addAction(self._actConnect)
+        self._mnuFile.addSeparator()
         self._mnuFile.addAction(self._actNew)
         self._mnuFile.addAction(self._actOpen)
         self._mnuFile.addAction(self._actSaveAs)
@@ -130,8 +131,12 @@ class FrontQtWindowMain(QMainWindow):
         self._lblVideoPos = QLabel()
         self._lblVideoPos.setText('Frame: 0/0')
         
+        self._lblBackendInfo = QLabel()
+        self._lblBackendInfo.setText('No Backend')
+        
         self.statusBar().addPermanentWidget(self._lblImagePos)
         self.statusBar().addPermanentWidget(self._lblVideoPos)
+        self.statusBar().addPermanentWidget(self._lblBackendInfo)
     
     def _createPaintDock(self):
         self._dwgPaint = QDockWidget('Painting', self)
@@ -320,17 +325,20 @@ class FrontQtWindowMain(QMainWindow):
         backend_info = self._dlgConnect.getBackendInfo()
         if backend_info['type'] == 'local':
             backend_to_attach = self._local_backend
+            self._lblBackendInfo.setText('Backend: local')
         else:
             backend_to_attach = FrontQtRemoteBackendSession(
                 backend_info['url'],
                 None if len(backend_info['user']) == 0 else
                 backend_info['user'], backend_info['pass']
             )
+            self._lblBackendInfo.setText('Backend: %s' % (backend_info['url']))
         
         if not self._wgtFrameEditor.attachBackendSession(backend_to_attach):
             QMessageBox.critical(
                 self, 'Connect to backend', 'Unable to initialize backend.'
             )
+            self._lblBackendInfo.setText('No Backend')
         
         self._updateUI()
     
@@ -483,7 +491,12 @@ class FrontQtWindowMain(QMainWindow):
             self, 'Backend disconnect',
             'Backend disconnected for some reason.'
         )
+        self._lblBackendInfo.setText('No Backend')
         self._updateUI()
+    
+    def showEvent(self, event):
+        if self._wgtFrameEditor.attachedBackend() is None:
+            self._connect()
     
     def __init__(self, model = None):
         QMainWindow.__init__(self)
