@@ -7,14 +7,21 @@ from PyQt5.QtWidgets import QMainWindow, QAction, QMenu, QMessageBox, qApp, \
     QColorDialog, QFileDialog
 
 from .ui_dialog_new_project import FrontQtDialogNewProject
+from .ui_dialog_connect_backend import FrontQtDialogConnectBackend
 from .ui_widget_video_frame_editor import FrontQtVideoFrameEditor
+from .ui_local_backend_session import FrontQtLocalBackendSession
+from .ui_remote_backend_session import FrontQtRemoteBackendSession
 
 class FrontQtWindowMain(QMainWindow):
     
     def _createDialogs(self):
         self._dlgNewProject = FrontQtDialogNewProject(self)
+        self._dlgConnect = FrontQtDialogConnectBackend(self)
     
     def _createActions(self):
+        self._actConnect = QAction('&Connect...')
+        self._actConnect.triggered.connect(self._connect)
+        
         self._actNew = QAction('&New project...')
         self._actNew.setShortcut('Ctrl+N')
         self._actNew.triggered.connect(self._newProject)
@@ -68,6 +75,7 @@ class FrontQtWindowMain(QMainWindow):
     
     def _createMenu(self):
         self._mnuFile = QMenu('&File')
+        self._mnuFile.addAction(self._actConnect)
         self._mnuFile.addAction(self._actNew)
         self._mnuFile.addAction(self._actOpen)
         self._mnuFile.addAction(self._actSaveAs)
@@ -108,6 +116,7 @@ class FrontQtWindowMain(QMainWindow):
             self._updateUI
         )
         self._wgtFrameEditor.state_changed.connect(self._updateUI)
+        self._wgtFrameEditor.backend_detached.connect(self._backendDetached)
         
         self.setCentralWidget(self._wgtFrameEditor)
     
@@ -242,8 +251,8 @@ class FrontQtWindowMain(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, self._dwgView)
         self._mnuView.addAction(self._dwgView.toggleViewAction())
     
-    def _initModel(self, model, model_context):
-        self._wgtFrameEditor.setModel(model, model_context)
+    def _initModel(self, model):
+        self._local_backend = FrontQtLocalBackendSession(model)
     
     def reset(self):
         self._pickedColor = QColor.fromRgb(128, 128, 128)
@@ -259,6 +268,7 @@ class FrontQtWindowMain(QMainWindow):
     def _updateUI(self):
         project_opened = (len(self._wgtFrameEditor.currentFilename()) > 0)
         points_selected = (len(self._wgtFrameEditor.selectedPoints()) > 0)
+        backend_connected = (self._wgtFrameEditor.attachedBackend() is not None)
         edit_state = (
             self._wgtFrameEditor.state() ==
             self._wgtFrameEditor.STATE_FRAME_EDIT
@@ -269,7 +279,9 @@ class FrontQtWindowMain(QMainWindow):
         self._actQuit.setEnabled(edit_state)
         
         self._actSaveAs.setEnabled(project_opened and edit_state)
-        self._actExportVideo.setEnabled(project_opened and edit_state)
+        self._actExportVideo.setEnabled(
+            project_opened and edit_state and backend_connected
+        )
         self._actExportFramePoints.setEnabled(project_opened and edit_state)
         self._actImportFramePoints.setEnabled(project_opened and edit_state)
         
@@ -280,7 +292,9 @@ class FrontQtWindowMain(QMainWindow):
         )
         self._actPaste.setEnabled(project_opened and edit_state)
         
-        self._tbtnInferenceModel.setEnabled(project_opened and edit_state)
+        self._tbtnInferenceModel.setEnabled(
+            project_opened and edit_state and backend_connected
+        )
     
     def _updatePickedColorButton(self):
         max_dimension = max((
@@ -298,6 +312,27 @@ class FrontQtWindowMain(QMainWindow):
         self._setPickedColor(
             QColorDialog.getColor(self._wgtFrameEditor.currentColor(), self)
         )
+    
+    def _connect(self):
+        if self._dlgConnect.exec() == 0:
+            return
+        
+        backend_info = self._dlgConnect.getBackendInfo()
+        if backend_info['type'] == 'local':
+            backend_to_attach = self._local_backend
+        else:
+            backend_to_attach = FrontQtRemoteBackendSession(
+                backend_info['url'],
+                None if len(backend_info['user']) == 0 else
+                backend_info['user'], backend_info['pass']
+            )
+        
+        if not self._wgtFrameEditor.attachBackendSession(backend_to_attach):
+            QMessageBox.critical(
+                self, 'Connect to backend', 'Unable to initialize backend.'
+            )
+        
+        self._updateUI()
     
     def _newProject(self):
         if self._dlgNewProject.exec() == 0:
@@ -443,7 +478,14 @@ class FrontQtWindowMain(QMainWindow):
             )
         self._updateUI()
     
-    def __init__(self, model = None, model_context = None):
+    def _backendDetached(self):
+        QMessageBox.critical(
+            self, 'Backend disconnect',
+            'Backend disconnected for some reason.'
+        )
+        self._updateUI()
+    
+    def __init__(self, model = None):
         QMainWindow.__init__(self)
         
         self._toolKeyList = (
@@ -467,7 +509,7 @@ class FrontQtWindowMain(QMainWindow):
         self._createStatusBar()
         self._createPaintDock()
         self._createViewDock()
-        self._initModel(model, model_context)
+        self._initModel(model)
         
         self.setWindowTitle('Qt Frontend')
         self.setWindowIcon(
