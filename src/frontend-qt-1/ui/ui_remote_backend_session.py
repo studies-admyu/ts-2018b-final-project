@@ -116,13 +116,18 @@ class FrontQtRemoteBackendSession(FrontQtGeneralBackendSession):
                 self._output_frame = None
                 self.disconnected.emit()
             else:
-                out_img = mr.decode_image(
-                    self._request_thread.response().content
-                )
-                self._output_frame = BackendFrame.cv2ToFrame(
-                    cv2.cvtColor(out_img, cv2.COLOR_RGB2BGR),
-                    self._run_context['color_points'][:]
-                )
+                try:
+                    out_img = mr.decode_image(
+                        self._request_thread.response().content
+                    )
+                    self._output_frame = BackendFrame.cv2ToFrame(
+                        cv2.cvtColor(out_img, cv2.COLOR_RGB2BGR),
+                        self._run_context['color_points'][:]
+                    )
+                except Exception:
+                    # Data corrupted
+                    self._output_frame = None
+                    self.disconnected.emit()
         elif self._run_context['operation'] == 'extrapolate_points':
             if self._request_thread.response() is None:
                 self._output_frame = None
@@ -131,16 +136,21 @@ class FrontQtRemoteBackendSession(FrontQtGeneralBackendSession):
                 self._output_frame = None
                 self.disconnected.emit()
             else:
-                result_dict = json.loads(
-                    self._request_thread.response().content
-                )
-            
-            self._output_frame = BackendFrame.cv2ToFrame(
-                cv2.cvtColor(
-                    mr.decode_image(result_dict['image']), cv2.COLOR_RGB2BGR
-                ),
-                result_dict['color_points']
-            )
+                try:
+                    result_dict = json.loads(
+                        self._request_thread.response().content
+                    )
+                    self._output_frame = BackendFrame.cv2ToFrame(
+                        cv2.cvtColor(
+                            mr.decode_image(result_dict['image']),
+                            cv2.COLOR_RGB2BGR
+                        ),
+                        result_dict['color_points']
+                    )
+                except Exception:
+                    # Data corrupted
+                    self._output_frame = None
+                    self.disconnected.emit()
         
         self._request_completed = True
         self.requestFinished.emit()
