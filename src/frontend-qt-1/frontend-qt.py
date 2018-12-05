@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import os
@@ -11,7 +10,7 @@ from data import colorize_image as CI
 from ui.ui_window_main import FrontQtWindowMain
 
 MODEL_CONTEXT = {
-    'gpu_id': -1,
+    'gpu_id': None,
     'load_size': 256,
     'pretrained_model': (
         'pretrained_models/checkpoints/siggraph_pretrained/' +
@@ -39,5 +38,5 @@ if __name__ == '__main__':
     # Init QApplication then
     app = QApplication(sys.argv)
     window = FrontQtWindowMain(colorization_model, MODEL_CONTEXT)
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec_())

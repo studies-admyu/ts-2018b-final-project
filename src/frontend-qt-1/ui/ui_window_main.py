@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from PyQt5.QtCore import Qt, QSignalMapper
-from PyQt5.QtGui import QColor, QIcon
+from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QAction, QMenu, QMessageBox, qApp, \
     QLabel, QDockWidget, QToolButton, QPushButton, QGridLayout, QFrame, \
     QColorDialog, QFileDialog
@@ -104,6 +104,10 @@ class FrontQtWindowMain(QMainWindow):
         self._wgtFrameEditor.frame_changed.connect(
             self._videoFrameChanged
         )
+        self._wgtFrameEditor.points_selection_changed.connect(
+            self._updateUI
+        )
+        self._wgtFrameEditor.state_changed.connect(self._updateUI)
         
         self.setCentralWidget(self._wgtFrameEditor)
     
@@ -246,17 +250,45 @@ class FrontQtWindowMain(QMainWindow):
         self._updatePickedColorButton()
         self._changeEditMode(self._toolKeyList[0])
         self._changeSceneMode(self._sceneModesList[0])
+        
+        self._updateUI()
     
     def about(self):
         QMessageBox.information(self, 'About', '<b>Qt Frontend</b>')
     
-    def _updatePickedColorButton(self):
-        palette = self._btnCurrentColor.palette()
-        palette.setColor(
-            self._btnCurrentColor.backgroundRole(),
-            self._wgtFrameEditor.currentColor()
+    def _updateUI(self):
+        project_opened = (len(self._wgtFrameEditor.currentFilename()) > 0)
+        points_selected = (len(self._wgtFrameEditor.selectedPoints()) > 0)
+        edit_state = (
+            self._wgtFrameEditor.state() ==
+            self._wgtFrameEditor.STATE_FRAME_EDIT
         )
-        self._btnCurrentColor.setPalette(palette)
+        
+        self._actNew.setEnabled(edit_state)
+        self._actOpen.setEnabled(edit_state)
+        self._actQuit.setEnabled(edit_state)
+        
+        self._actSaveAs.setEnabled(project_opened and edit_state)
+        self._actExportVideo.setEnabled(project_opened and edit_state)
+        self._actExportFramePoints.setEnabled(project_opened and edit_state)
+        self._actImportFramePoints.setEnabled(project_opened and edit_state)
+        
+        self._actCopySelected.setEnabled(
+            project_opened and points_selected and edit_state)
+        self._actDeleteSelected.setEnabled(
+            project_opened and points_selected and edit_state
+        )
+        self._actPaste.setEnabled(project_opened and edit_state)
+        
+        self._tbtnInferenceModel.setEnabled(project_opened and edit_state)
+    
+    def _updatePickedColorButton(self):
+        max_dimension = max((
+            self._btnCurrentColor.width(), self._btnCurrentColor.height()
+        ))
+        back_pixmap = QPixmap(max_dimension, max_dimension)
+        back_pixmap.fill(self._wgtFrameEditor.currentColor())
+        self._btnCurrentColor.setIcon(QIcon(back_pixmap))
     
     def _setPickedColor(self, new_color):
         self._wgtFrameEditor.setCurrentColor(new_color)
@@ -278,6 +310,8 @@ class FrontQtWindowMain(QMainWindow):
                 self, 'New project', 'Unable to open video <b>%s</b>.' %
                 (self._dlgNewProject.getVideoFilename())
             )
+        
+        self.reset()
     
     def _frameMouseMove(self, x, y):
         self._lblImagePos.setText('X: %4d Y: %4d' % (x, y))
@@ -310,7 +344,17 @@ class FrontQtWindowMain(QMainWindow):
         )
         if len(project_filename[0]) == 0:
             return
-        self._wgtFrameEditor.openProject(project_filename[0])
+        
+        try:
+            self._wgtFrameEditor.openProject(project_filename[0])
+        except Exception:
+            self._wgtFrameEditor.reset()
+            QMessageBox.critical(
+                self, 'Open project error', 'Unable to open project file ' +
+                ('<i>%s</i>' % (project_filename[0])) +
+                ' due to wrong file format or access restrictions.'
+            )
+        self.reset()
     
     def _saveProjectAs(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
@@ -320,39 +364,84 @@ class FrontQtWindowMain(QMainWindow):
         )
         if len(project_filename[0]) == 0:
             return
-        self._wgtFrameEditor.saveProject(project_filename[0])
+        try:
+            self._wgtFrameEditor.saveProject(project_filename[0])
+        except Exception:
+            QMessageBox.critical(
+                self, 'Save project error', 'Unable to save current project ' +
+                'to file ' +
+                ('<i>%s</i>' % (project_filename[0])) +
+                ' due to access restrictions.'
+            )
+        self._updateUI()
     
     def _exportInferencedVideo(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
             return
+        
+        output_formats = [
+            self._wgtFrameEditor.VIDEO_FORMAT_PNG_SEQUENCE,
+            self._wgtFrameEditor.VIDEO_FORMAT_X264
+        ]
+        extension_dict = {
+            'Sequenced png files (*.png)': output_formats[0],
+            'MPEG4 video files (*.mp4)': output_formats[1]
+        }
+        
         output_video_filename = QFileDialog.getSaveFileName(
-            self, 'Export video'
+            self, 'Export video',
+            filter = ';;'.join(extension_dict.keys())
         )
         if len(output_video_filename[0]) == 0:
             return
-        self._wgtFrameEditor.exportInferencedVideo(
-            output_video_filename[0], 0
-        )
+        if not self._wgtFrameEditor.exportInferencedVideo(
+            output_video_filename[0], extension_dict[output_video_filename[1]]
+        ):
+            QMessageBox.critical(
+                self, 'Export video',
+                ('Unable to export video to file ' +
+                '<i>%s</i>. Please check your installed codecs, ' +
+                'access restrictions or free storage amount.') % (
+                    output_video_filename[0]
+                )
+            )
     
     def _exportColorPoints(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
             return
-        project_filename = QFileDialog.getSaveFileName(
+        export_filename = QFileDialog.getSaveFileName(
             self, 'Export color points file'
         )
-        if len(project_filename[0]) == 0:
+        if len(export_filename[0]) == 0:
             return
-        self._wgtFrameEditor.exportColorPoints(project_filename[0])
+        try:
+            self._wgtFrameEditor.exportColorPoints(export_filename[0])
+        except Exception:
+            QMessageBox.critical(
+                self, 'Export color points error',
+                'Unable to export color points to file ' +
+                ('<i>%s</i>' % (export_filename[0])) +
+                ' due to access restrictions.'
+            )
     
     def _importColorPoints(self):
         if len(self._wgtFrameEditor.currentFilename()) == 0:
             return
-        project_filename = QFileDialog.getOpenFileName(
+        import_filename = QFileDialog.getOpenFileName(
             self, 'Import color points file'
         )
-        if len(project_filename[0]) == 0:
+        if len(import_filename[0]) == 0:
             return
-        self._wgtFrameEditor.importColorPoints(project_filename[0])
+        try:
+            self._wgtFrameEditor.importColorPoints(import_filename[0])
+        except Exception:
+            QMessageBox.critical(
+                self, 'Import color points error',
+                'Unable to import color points from file ' +
+                ('<i>%s</i>' % (import_filename[0])) +
+                ' due to wrong file format or access restrictions.'
+            )
+        self._updateUI()
     
     def __init__(self, model = None, model_context = None):
         QMainWindow.__init__(self)
@@ -381,7 +470,6 @@ class FrontQtWindowMain(QMainWindow):
         self._initModel(model, model_context)
         
         self.setWindowTitle('Qt Frontend')
-        self.setWindowState(Qt.WindowMaximized)
         self.setWindowIcon(
             QIcon('images/icons/32x32_color/convert_gray_to_color.png')
         )

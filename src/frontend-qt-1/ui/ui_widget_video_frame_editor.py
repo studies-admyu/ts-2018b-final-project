@@ -136,6 +136,8 @@ class FrontQtVideoFrameEditor(QFrame):
     frame_mouse_move = pyqtSignal(int, int)
     frame_mouse_leave = pyqtSignal()
     frame_changed = pyqtSignal()
+    points_selection_changed = pyqtSignal()
+    state_changed = pyqtSignal(int)
     
     EDIT_MODE_HAND = 0
     EDIT_MODE_EYEDROPPER = 1
@@ -147,7 +149,11 @@ class FrontQtVideoFrameEditor(QFrame):
     SCENE_MODE_GRAYSCALE = 1
     SCENE_MODE_COLORIZED = 2
     
-    VIDEO_FORMAT_PNG_SEQUENCE = 0,
+    STATE_FRAME_EDIT = 0
+    STATE_COLORIZATION = 1
+    STATE_VIDEO_EXPORT = 2
+    
+    VIDEO_FORMAT_PNG_SEQUENCE = 0
     VIDEO_FORMAT_X264 = 1
     
     def reset(self):
@@ -175,7 +181,9 @@ class FrontQtVideoFrameEditor(QFrame):
         self._frame_slider.valueChanged.connect(self.switchFrame)
         
         self._main_widget_stack.setVisible(False)
-        self._main_widget_stack.setCurrentIndex(0)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        
+        self._scene.clearSelection()
         
         self.setEditMode(self.EDIT_MODE_HAND)
         self.setSceneMode(self.SCENE_MODE_ORIGINAL)
@@ -196,7 +204,6 @@ class FrontQtVideoFrameEditor(QFrame):
         self._scene_widget.setAutoFillBackground(True)
         self._scene_widget.setBackgroundRole(QPalette.Dark)
         self._scene_widget.setMouseTracking(True)
-        self._scene_widget.setInteractive(True)
         
         self._scene_widget.mouse_moved.connect(self._frameViewMouseMoveEvent)
         self._scene_widget.mouse_pressed.connect(
@@ -236,6 +243,7 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self._scene = QGraphicsScene()
         self._scene_widget.setScene(self._scene)
+        self._scene.selectionChanged.connect(self._sceneSelectionChanged)
         
         self._calculation_widget = QLabel()
         self._calculation_widget.setAutoFillBackground(True)
@@ -313,9 +321,18 @@ class FrontQtVideoFrameEditor(QFrame):
         self._video_frame.setLayout(video_layout)
         
         self._main_widget_stack = QStackedWidget()
-        self._main_widget_stack.insertWidget(0, self._video_frame)
-        self._main_widget_stack.insertWidget(1, self._calculation_widget)
-        self._main_widget_stack.insertWidget(2, self._export_widget)
+        self._main_widget_stack.insertWidget(
+            self.STATE_FRAME_EDIT, self._video_frame
+        )
+        self._main_widget_stack.insertWidget(
+            self.STATE_COLORIZATION, self._calculation_widget
+        )
+        self._main_widget_stack.insertWidget(
+            self.STATE_VIDEO_EXPORT, self._export_widget
+        )
+        self._main_widget_stack.currentChanged.connect(
+            self._stackCurrentChanged
+        )
         
         top_layout = QVBoxLayout()
         top_layout.addWidget(self._main_widget_stack)
@@ -430,6 +447,7 @@ class FrontQtVideoFrameEditor(QFrame):
                 (self.framesCount())
             )
         
+        self._scene.clearSelection()
         if frame_index not in self._points_cache:
             self._setCachedPoints([], frame_index)
         
@@ -481,11 +499,29 @@ class FrontQtVideoFrameEditor(QFrame):
             out_filename_mask,
             os.path.split(absolute_filepath)[-1].split(os.path.extsep)[0]
         )
-        out_filename_mask += '_%0' + str(
-            math.floor(math.log10(self.framesCount())) + 1
-        ) + 'u.png'
+        if video_format == self.VIDEO_FORMAT_PNG_SEQUENCE:
+            out_filename_mask += '_%0' + str(
+                math.floor(math.log10(self.framesCount())) + 1
+            ) + 'u.png'
+            export_writer = None
+        else:
+            out_filename_mask += '.mp4'
+            frame_size = (
+                self._frame_image_orig.width(), self._frame_image_orig.height()
+            )
+            fourcc = cv2.VideoWriter_fourcc(*'X264')
+            export_writer = cv2.VideoWriter(
+                out_filename_mask, fourcc,
+                self._vcap.get(cv2.CAP_PROP_FPS),
+                frame_size
+            )
+            if not export_writer.isOpened():
+                return False
         
-        self._export_video_edit.setText(out_filename_mask % (0))
+        self._export_video_edit.setText(
+            out_filename_mask % (0) if export_writer is None
+            else out_filename_mask
+        )
         
         self._export_video_progress.setMinimum(0)
         self._export_video_progress.setMaximum(self.framesCount())
@@ -499,8 +535,10 @@ class FrontQtVideoFrameEditor(QFrame):
                 self._export_video_progress.maximum()
             )
         )
+        self._export_video_frame_label.clear()
         
-        self._main_widget_stack.setCurrentIndex(2)
+        self._main_widget_stack.setCurrentIndex(self.STATE_VIDEO_EXPORT)
+        frame_saved = True
         
         for frame_index in range(1, self.framesCount() + 1):
             self.switchFrame(frame_index)
@@ -540,22 +578,40 @@ class FrontQtVideoFrameEditor(QFrame):
                 )
             )
             
-            self._frame_image_model_output.save(
-                out_filename_mask % (frame_index)
-            )
+            if export_writer is not None:
+                frame_image_model_output_cv2, _ = self._backend.frameToCv2(
+                    self._backend.outputFrame()
+                )
+                try:
+                    export_writer.write(frame_image_model_output_cv2)
+                except Exception:
+                    frame_saved = False
+                    break
+            else:
+                if not self._frame_image_model_output.save(
+                    out_filename_mask % (frame_index)
+                ):
+                    frame_saved = False
+                    break
             
             self._export_video_progress.setValue(frame_index)
             if self._export_cancelled:
                 break
         
+        if export_writer is not None:
+            export_writer.release()
+        
         self.switchFrame(current_frame)
-        self._main_widget_stack.setCurrentIndex(0)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        
+        return frame_saved
     
     def openProject(self, filename):
         with open(filename, 'r') as f:
             project_file_dict = json.loads(f.read())
         
-        self.openVideoFile(project_file_dict['video_file'])
+        if not self.openVideoFile(project_file_dict['video_file']):
+            raise Exception('Unable to open project video')
         
         for frame_index in project_file_dict['color_points']:
             frame_points = [
@@ -640,6 +696,7 @@ class FrontQtVideoFrameEditor(QFrame):
             
             color_points.append(color_point_dict)
         
+        self._scene.clearSelection()
         self._setCurrentPoints(color_points)
     
     def _mapCursorToSceneCoordinates(self, point):
@@ -782,17 +839,28 @@ class FrontQtVideoFrameEditor(QFrame):
     def currentFilename(self):
         return self._video_filename
     
+    def state(self):
+        return self._main_widget_stack.currentIndex()
+    
+    def _stackCurrentChanged(self, state):
+        self.state_changed.emit(state)
+    
     def setEditMode(self, mode):
         self._editMode = mode
         
         if self._editMode == self.EDIT_MODE_HAND:
             self._scene_widget.setDragMode(QGraphicsView.ScrollHandDrag)
-            self._scene_widget.setCursor(Qt.ArrowCursor)
+            self._scene_widget.setInteractive(False)
+            self._scene.clearSelection()
         elif self._editMode == self.EDIT_MODE_EDIT_POINT:
             self._scene_widget.setDragMode(QGraphicsView.RubberBandDrag)
+            self._scene_widget.setInteractive(True)
+            self._scene_widget.setCursor(Qt.CrossCursor)
         else:
             self._scene_widget.setDragMode(QGraphicsView.NoDrag)
+            self._scene_widget.setInteractive(False)
             self._scene_widget.setCursor(Qt.CrossCursor)
+            self._scene.clearSelection()
     
     def editMode(self):
         return self._editMode
@@ -930,6 +998,15 @@ class FrontQtVideoFrameEditor(QFrame):
     def framesCount(self):
         return self._frame_slider.maximum()
     
+    def selectedPoints(self):
+        return [
+            p for p in self._scene.selectedItems()
+            if isinstance(p, _FrontQtVideoFramePoint)
+        ]
+    
+    def _sceneSelectionChanged(self):
+        self.points_selection_changed.emit()
+    
     def setModel(self, model, context):
         self._model = model
         self._model_context = context
@@ -947,7 +1024,8 @@ class FrontQtVideoFrameEditor(QFrame):
         # Skip on inference
         if self._main_widget_stack.currentIndex() != 0:
             return
-        self._main_widget_stack.setCurrentIndex(1)
+        self._scene.clearSelection()
+        self._main_widget_stack.setCurrentIndex(self.STATE_COLORIZATION)
         self._backend.colorizeByPoints(
             BackendFrame(self._frame_image_orig, self._getCurrentPoints())
         )
@@ -962,4 +1040,4 @@ class FrontQtVideoFrameEditor(QFrame):
         self._frame_image_model_output = self._backend.outputFrame().image()
         # Update pixmap
         self.setSceneMode(self.sceneMode())
-        self._main_widget_stack.setCurrentIndex(0)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
