@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import qApp, QFrame, QGraphicsView, QGraphicsScene, \
     QStackedWidget, QSlider, QPushButton, QWidget, QHBoxLayout, QFormLayout, \
     QLineEdit, QProgressBar
 
-from .ui_local_backend import FrontQtLocalBackend, BackendFrame
+from .ui_general_backend_session import BackendFrame
 
 _COLOR_POINT_RADIUS = 3
 _COLOR_POINT_DEFAULT_COLOR = QColor.fromRgb(128, 128, 128)
@@ -138,6 +138,7 @@ class FrontQtVideoFrameEditor(QFrame):
     frame_changed = pyqtSignal()
     points_selection_changed = pyqtSignal()
     state_changed = pyqtSignal(int)
+    backend_detached = pyqtSignal()
     
     EDIT_MODE_HAND = 0
     EDIT_MODE_EYEDROPPER = 1
@@ -339,14 +340,49 @@ class FrontQtVideoFrameEditor(QFrame):
         top_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(top_layout)
         
-        self._backend = FrontQtLocalBackend(None, None)
-        self._backend.inferenceFinished.connect(
-            self._backendOperationCompleted
-        )
-        
-        self.setModel(None, None)
+        self._backend = None
+        self._backend_disconnected = False
+        self._resetBackend()
         
         self.reset()
+    
+    def _resetBackend(self):
+        if self._backend is not None:
+            self._backend.requestFinished.disconnect(
+                self._backendOperationCompleted
+            )
+            self._backend.disconnected.disconnect(
+                self._backendDisconnected
+            )
+        self._backend = None
+        self._extrapolate_next_button.setEnabled(False)
+        self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        
+        if self._backend_disconnected:
+            self.backend_detached.emit()
+        
+        self._backend_disconnected = False
+    
+    def attachBackendSession(self, backend_session):
+        self._resetBackend()
+        self._backend = backend_session
+        if self._backend is not None:
+            if not self._backend.authenticate():
+                self._backend = None
+                return False
+            
+            self._backend_disconnected = False
+            self._extrapolate_next_button.setEnabled(True)
+            self._backend.requestFinished.connect(
+                self._backendOperationCompleted
+            )
+            self._backend.disconnected.connect(
+                self._backendDisconnected
+            )
+            return True
+    
+    def attachedBackend(self):
+        return self._backend
     
     def _switchFrame(self, frame_index):
         if self._vcap is None:
@@ -377,8 +413,8 @@ class FrontQtVideoFrameEditor(QFrame):
         frame_gray3 = cv2.cvtColor(
             cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2RGB
         )
-        self._frame_image_orig = self._backend.cv2ToFrame(frame).image()
-        self._frame_image_gray3 = self._backend.cv2ToFrame(frame_gray3).image()
+        self._frame_image_orig = BackendFrame.cv2ToFrame(frame).image()
+        self._frame_image_gray3 = BackendFrame.cv2ToFrame(frame_gray3).image()
         self._frame_image_model_output = self._frame_image_gray3
 
         self.setSceneMode(self.sceneMode())
@@ -481,8 +517,7 @@ class FrontQtVideoFrameEditor(QFrame):
         self._export_cancelled = True
     
     def exportInferencedVideo(self, filename, video_format):
-        # Skip if no model
-        if self._model is None:
+        if self._backend is None:
             return
         # Skip on inference
         if self._main_widget_stack.currentIndex() > 0:
@@ -555,6 +590,14 @@ class FrontQtVideoFrameEditor(QFrame):
             )
             while not self._backend.isCompleted():
                 qApp.processEvents()
+            
+            # Check whenever backend still connected
+            if self._backend_disconnected:
+                break
+            # Check whenever backend has returned any output frame
+            if self._backend.outputFrame() is None:
+                break
+            
             self._frame_image_model_output = \
                 self._backend.outputFrame().image()
             
@@ -579,7 +622,7 @@ class FrontQtVideoFrameEditor(QFrame):
             )
             
             if export_writer is not None:
-                frame_image_model_output_cv2, _ = self._backend.frameToCv2(
+                frame_image_model_output_cv2, _ = BackendFrame.frameToCv2(
                     self._backend.outputFrame()
                 )
                 try:
@@ -603,6 +646,9 @@ class FrontQtVideoFrameEditor(QFrame):
         
         self.switchFrame(current_frame)
         self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+        
+        if self._backend_disconnected:
+            self._resetBackend()
         
         return frame_saved
     
@@ -968,29 +1014,29 @@ class FrontQtVideoFrameEditor(QFrame):
             return
         if self._current_frame >= self.framesCount():
             return
+        if self._backend is None:
+            return
+        
+       # Skip on inference
+        if self._main_widget_stack.currentIndex() != 0:
+            return
+        self._scene.clearSelection()
+        self._main_widget_stack.setCurrentIndex(self.STATE_COLORIZATION)
         
         new_frame_index = self._current_frame + 1
         self.switchFrame(new_frame_index)
         
-        old_frame = self._backend.cv2ToFrame(
+        old_frame = BackendFrame.cv2ToFrame(
             self._frames_cache[new_frame_index - 1],
             self._points_cache[new_frame_index - 1]
         )
         
-        new_frame = self._backend.cv2ToFrame(
+        new_frame = BackendFrame.cv2ToFrame(
             self._frames_cache[new_frame_index],
             []
         )
         
         self._backend.extrapolateColorPoints(old_frame, new_frame)
-        extrapolated_frame = self._backend.outputFrame()
-        # Set calculated points ans new ones for the frame
-        self._setCachedPoints(
-            extrapolated_frame.color_points(), new_frame_index
-        )
-        # Update on sceeen
-        self._setCurrentPoints(extrapolated_frame.color_points())
-        self.modelInference()
     
     def currentFrame(self):
         return self._current_frame
@@ -1007,19 +1053,8 @@ class FrontQtVideoFrameEditor(QFrame):
     def _sceneSelectionChanged(self):
         self.points_selection_changed.emit()
     
-    def setModel(self, model, context):
-        self._model = model
-        self._model_context = context
-        self._backend.setModel(model, context)
-    
-    def model(self):
-        return self._model
-    
-    def modelContext(self):
-        return self._model_context
-    
     def modelInference(self):
-        if self._model is None:
+        if self._backend is None:
             return
         # Skip on inference
         if self._main_widget_stack.currentIndex() != 0:
@@ -1031,13 +1066,27 @@ class FrontQtVideoFrameEditor(QFrame):
         )
     
     def _backendOperationCompleted(self):
-        if self._model is None:
+        if self._backend is None:
             return
         # Skip on export
         if self._main_widget_stack.currentIndex() != 1:
             return
+        if self._backend_disconnected and (self._backend is not None):
+            self._resetBackend()
+        else:
+            # Update model predicted image
+            self._frame_image_model_output = self._backend.outputFrame().image()
+            # Update pixmap
+            self.setSceneMode(self.sceneMode())
+            
+            # Set calculated points ans new ones for the frame
+            self._setCachedPoints(
+                self._backend.outputFrame().color_points(), self._current_frame
+            )
+            # Update on sceeen
+            self._setCurrentPoints(self._backend.outputFrame().color_points())
         
-        self._frame_image_model_output = self._backend.outputFrame().image()
-        # Update pixmap
-        self.setSceneMode(self.sceneMode())
         self._main_widget_stack.setCurrentIndex(self.STATE_FRAME_EDIT)
+    
+    def _backendDisconnected(self):
+        self._backend_disconnected = True

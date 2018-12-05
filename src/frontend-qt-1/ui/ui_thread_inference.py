@@ -3,10 +3,10 @@
 from PyQt5.QtCore import QThread
 
 class FrontQtInferenceThread(QThread):
-    def __init__(self):
+    def __init__(self, model = None):
         QThread.__init__(self)
-        self.setModel(None)
-        self.setForwardArgsList(None)
+        self.setModel(model)
+        self.setForwardArgsList([])
     
     def __del__(self):
         self.wait()
@@ -24,5 +24,5 @@ class FrontQtInferenceThread(QThread):
         return self._args_list
     
     def run(self):
-        if (self._model is not None) and (self._args_list is not None):
+        if (self._model is not None) and isinstance(self._args_list, list):
             self._model.net_forward(*self._args_list)

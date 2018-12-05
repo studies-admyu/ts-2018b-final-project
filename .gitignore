@@ -1,3 +1,10 @@
 *.pyc
 *.pyo
 __pycache__
+*.ipynb_checkpoints
+samples/*.avi
+src/backend-django-1/common
+src/backend-django-1/*.sqlite3
+src/backend-django-1/simple_backend/settings.py
+src/frontend-qt-1/common
+src/common-1/pretrained_models/checkpoints/*
